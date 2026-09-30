@@ -8,6 +8,14 @@
     self.submodules = true;
 
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+
+    # Emacs 30.2 pinned to nixpkgs @ 2026-08-25, scoped to Spacemacs only.
+    # Spacemacs is incompatible with Emacs 31.1; every other config (and PATH
+    # `emacs`) tracks the main nixpkgs input. A rev-pinned URL is immutable, so
+    # `nix flake update` cannot move it -- bump deliberately if Spacemacs is
+    # ever ported. Consumed only by editors/emacs/emacs.nix (`semacs`).
+    nixpkgs-spacemacs.url = "github:nixos/nixpkgs/ac6b2166e7a9375683b8e98f860f273222337b16";
+
     home-manager = {
       url = "github:nix-community/home-manager";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -35,7 +43,6 @@
       flake = false;
     };
 
-
     microchip = {
       url = "github:cormacc/nix-microchip";
       # url = "/home/cormacc/dev/nix-microchip";
@@ -49,6 +56,7 @@
     nix-amd-ai.url = "github:noamsto/nix-amd-ai";
     pi.url = "github:lukasl-dev/pi.nix";
     claude-code.url = "github:sadjow/claude-code-nix";
+    codex-desktop.url = "github:ilysenko/codex-desktop-linux";
 
     herdr = {
       url = "github:ogulcancelik/herdr";
@@ -75,6 +83,7 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    nix-babashka.url = "github:cormacc/nix-babashka";
   };
 
   # NOTE: nixConfig must be a literal attrset of literals — nix parses it
@@ -108,7 +117,7 @@
     ];
   };
 
-  outputs = { self, nixpkgs, nixpkgs-darwin, home-manager, home-manager-darwin, nix-darwin, nix-homebrew, homebrew-core, homebrew-cask, microchip, claude-code, claude-desktop, hermes-agent, rust-overlay, nur, pi, dirge, herdr, nix-amd-ai, ... } @inputs:
+  outputs = { self, nixpkgs, nixpkgs-darwin, home-manager, home-manager-darwin, nix-darwin, nix-homebrew, homebrew-core, homebrew-cask, microchip, claude-code, claude-desktop, codex-desktop, hermes-agent, rust-overlay, nur, pi, dirge, herdr, nix-amd-ai, nix-babashka, ... } @inputs:
     let
       inherit (self) outputs;
       system = "x86_64-linux";
@@ -122,6 +131,7 @@
         nur.overlays.default
         pi.overlays.default
         rust-overlay.overlays.default
+        nix-babashka.overlays.default
         # Local packages: pkgs/<name>/default.nix -> pkgs.<name>
         (import ./pkgs/overlay.nix)
       ];
@@ -130,6 +140,7 @@
         dirge.overlays.default
         herdr.overlays.default
         pi.overlays.default
+        nix-babashka.overlays.default
       ];
       # pkgs = nixpkgs.legacyPackages.${system};
       pkgs = import nixpkgs {
@@ -192,6 +203,7 @@
             inputs.nix-amd-ai.nixosModules.default
             ./hosts/strix/hardware-configuration.nix
             ./hosts/strix/nixos-configuration.nix
+            ./nixos-boot-default.nix
             ./nixos-workstation.nix
             ./nixos-gaming.nix
           ];
@@ -242,6 +254,7 @@
           inherit pkgs;
           modules = [
             ./home.nix
+            codex-desktop.homeManagerModules.default
           ];
           extraSpecialArgs = {
             cfgName = "default";

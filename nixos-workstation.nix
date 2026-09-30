@@ -69,8 +69,14 @@
   services.udev.packages = [
     pkgs.nrf-udev
     pkgs.openocd
-    # pkgs.segger-jlink
+    pkgs.segger-jlink
   ];
+
+  # segger-jlink (needed for its udev rules above) is unfree and pulls in the
+  # insecure segger-jlink-qt4-810. allowUnfree is set in nixos-base.nix; the
+  # remaining overrides must be on the NixOS system nixpkgs config too.
+  nixpkgs.config.permittedInsecurePackages = [ "segger-jlink-qt4-952" ];
+  nixpkgs.config.segger-jlink.acceptLicense = true;
 
   # Required to install sway via home-manager
   # ... but we're installing via nixos
@@ -103,8 +109,16 @@
 
   # List packages installed in system profile. To search, run:
   # $ nix search wget
-  environment.variables.EDITOR = pkgs.lib.mkForce "emacsclient -nw";
-  environment.variables.VISUAL = "emacsclient -n -c";
+  # `--alternate-editor=` (empty value) makes emacsclient start `emacs --daemon`
+  # on demand instead of failing with "can't find socket"; there is no
+  # services.emacs unit. Written as the long `=` form so consumers that split
+  # $EDITOR on whitespace without shell quoting still pass an empty value.
+  environment.variables.EDITOR = pkgs.lib.mkForce "emacsclient --alternate-editor= -nw";
+  # No "-n": git resolves GIT_EDITOR -> core.editor -> VISUAL -> EDITOR, so
+  # VISUAL (not EDITOR) is what `git commit` actually runs on this host, and
+  # -n (--no-wait) would make emacsclient return before the commit buffer is
+  # edited, aborting with an empty message. See design/log/2026-09-03-bootstrap-standalone-emacs-config.org.
+  environment.variables.VISUAL = "emacsclient --alternate-editor= -c";
 
   environment.systemPackages = with pkgs; [
     waybar
