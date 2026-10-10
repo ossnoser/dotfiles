@@ -1,6 +1,18 @@
-{ config, pkgs, ... }:
+{ config, pkgs, inputs, ... }:
 
 let
+  # Spacemacs alone is held at Emacs 30.2 via the rev-pinned `nixpkgs-spacemacs`
+  # flake input -- 31.1 breaks it, and nixpkgs no longer carries an `emacs30-*`
+  # attribute. PATH `emacs` and every other config track the main nixpkgs.
+  pkgsSpacemacs = import inputs.nixpkgs-spacemacs {
+    inherit (pkgs.stdenv.hostPlatform) system;
+    config.allowUnfree = true;
+  };
+
+  # Pinned 30.2 Emacs used only by the `semacs` alias below. Not on PATH.
+  spacemacsEmacs = (pkgsSpacemacs.emacsPackagesFor pkgsSpacemacs.emacs).emacsWithPackages
+    (epkgs: [ epkgs.vterm ]);
+
   commonSessionVariables = {
     #Use xdg-config layout for spacemacs
     SPACEMACSDIR = "${config.xdg.configHome}/spacemacs";
@@ -16,18 +28,11 @@ in {
   programs.pandoc.enable = true;
   programs.texlive.enable = true;
 
+  #N.B. See dev.nix for font installation...
   home.packages = with pkgs; [
-    # aspell
-    # aspellDicts.en
-    # aspellDicts.ga
-    (aspellWithDicts (dicts: with dicts; [en en-computers en-science ga]))
-    source-code-pro
+    (aspellWithDicts (dicts: with dicts; [en ga]))
     ripgrep
     gsettings-desktop-schemas
-    #vterm deps
-    # .. This is old/broken -- see https://weblog.zamazal.org/sw-problem-nixos-emacs-vterm/
-    # libvterm
-    # ... This allegedly isn't
     libvterm-neovim
     # org export
     zip #for ODT export
@@ -36,6 +41,13 @@ in {
     cmake
     gnumake
     gcc
+    # dirvish file previews (`fd' comes from programs.fd in shell/shell.nix,
+    # 7z from p7zip). Each missing program makes dirvish warn on first use.
+    vips # vipsthumbnail -- images
+    ffmpegthumbnailer # video thumbnails
+    mediainfo # audio/video metadata
+    poppler-utils # pdftoppm -- pdf
+    imagemagick # magick -- fonts
     # charts
     plantuml
     # plantuml-c4
@@ -64,28 +76,31 @@ in {
   home.file.".local/bin/md2org".source=./bin/md2org;
   home.file.".local/bin/org2md".source=./bin/org2md;
 
-  # TODO: Add more config for doom -- currently we're checking out manually to this location
-  home.shellAliases = {
-    emacs-doom = "emacs --init-directory=~/.config/doom-emacs";
-  };
-
   # Emacs and dependencies
   programs.emacs = {
     enable = true;
-    # Using pure GTK build for wayland, but not sure it's necessary...
-    package = pkgs.emacs-pgtk;
     extraPackages = (epkgs: [ epkgs.vterm ]);
   };
-  services.emacs = {
-    enable = true;
-    client.enable = true;
-    # defaultEditor = true;
-  };
+
+  # Minimal literate config -- the *default* configuration, so bare `emacs`
+  # (and `emacsclient --alternate-editor=`) picks it up through the normal XDG
+  # startup search, with no alias and no --init-dir.
+  #
+  # Same out-of-store pattern as Corgi: the three sources are editable in place
+  # and the containing directory stays writable, so elpaca clones, the tangled
+  # config.el, and eln caches live in ~/.config/emacs, not in the repo.
+  xdg.configFile."emacs/early-init.el".source = config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/dotfiles/editors/emacs/minimal/early-init.el";
+  xdg.configFile."emacs/init.el".source = config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/dotfiles/editors/emacs/minimal/init.el";
+  xdg.configFile."emacs/config.org".source = config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/dotfiles/editors/emacs/minimal/config.org";
 
 
-  # Spacemacs
+  # Alternate distributions
 
-  home.file."${config.xdg.configHome}/emacs" = {
+  # ... Spacemacs
+
+  # Launched via the `semacs` alias on the pinned 30.2 build; deliberately not
+  # at ~/.config/emacs, which now holds the default literate config below.
+  home.file."${config.xdg.configHome}/emacs-spacemacs" = {
     recursive = true;
     #Use this variant to pin a specific commit
     # source = pkgs.fetchFromGitHub {
@@ -107,36 +122,21 @@ in {
   home.file."${config.xdg.configHome}/spacemacs".source = config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/dotfiles/editors/emacs/spacemacs";
 
 
-  # Doom emacs
-  # This doesn't work, as doomemacs wants to modify its own directory
-  # Cloning manually instead for now
-  # home.file."${config.xdg.configHome}/emacs-doom" = {
-  #   recursive = true;
-  #   source = builtins.fetchGit {
-  #     url = "https://github.com/doomemacs/doomemacs";
-  #     ref = "master";
-  #   };
-  # };
-
-  # Do this to have a symlinked read-only version
-  # home.file."${config.xdg.configHome}/doom".source = .config/doom;
-  # ... or this to keep it editable in-place, rather than have to 'home-manager switch ...' after each edit
-  home.file."${config.xdg.configHome}/doom".source = config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/dotfiles/editors/emacs/doom";
-
-
-  # Corgi emacs... a clojure-focused minimal config with spacemacs-like keybindings
+  # ... Corgi emacs... a clojure-focused minimal config with spacemacs-like keybindings
   # See https://github.com/corgi-emacs/corgi
 
-  # Do this to have a symlinked read-only version
-  # home.file."${config.xdg.configHome}/corgi".source = .config/corgi;
-  # ... or this to keep it editable in-place, rather than have to 'home-manager switch ...' after each edit
-  home.file."${config.xdg.configHome}/emacs-corgi".source = config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/dotfiles/editors/emacs/corgi";
+  # Keep the config files editable in place, but leave the containing directory
+  # writable so Emacs runtime state does not end up in the dotfiles repository.
+  xdg.configFile."emacs-corgi/bootstrap.el".source = config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/dotfiles/editors/emacs/corgi/bootstrap.el";
+  xdg.configFile."emacs-corgi/early-init.el".source = config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/dotfiles/editors/emacs/corgi/early-init.el";
+  xdg.configFile."emacs-corgi/init.el".source = config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/dotfiles/editors/emacs/corgi/init.el";
+  xdg.configFile."emacs-corgi/user-keys.el".source = config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/dotfiles/editors/emacs/corgi/user-keys.el";
+  xdg.configFile."emacs-corgi/user-signals.el".source = config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/dotfiles/editors/emacs/corgi/user-signals.el";
 
-  # TODO: add config dir after populating initial config...
 
+  # Bare `emacs` loads the default / literate config
   home.shellAliases = {
-    demacs = "emacs --init-dir ~/.config/emacs-doom";
-    doom = "~/.config/emacs-doom/bin/doom";
     cemacs = "emacs --init-dir ~/.config/emacs-corgi";
+    spacemacs = "${spacemacsEmacs}/bin/emacs --init-dir ${config.xdg.configHome}/emacs-spacemacs";
   };
 }

@@ -15,7 +15,7 @@
       # See https://github.com/kovidgoyal/kitty/issues/10102
       # Should be retired shortly -- upstream fix waiting for merge
       auto_reload_config = -1;
-    } // lib.optionalAttrs pkgs.stdenv.isDarwin {
+    } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
       # Make Option behave as Alt so chords like Alt+Esc reach TUIs (e.g. pi).
       macos_option_as_alt = "yes";
     };
@@ -24,12 +24,18 @@
   programs.wezterm.enable = true;
 
   home.packages = with pkgs; [
-    nerd-fonts.roboto-mono
-    nerd-fonts.jetbrains-mono
-    nerd-fonts.inconsolata
+    # This page compares some fonts: https://jdsalaro.com/note/best-programming-fonts/index.html
     nerd-fonts.hack
     nerd-fonts.fira-code
+    nerd-fonts.iosevka
+    nerd-fonts._0xproto
+    nerd-fonts.jetbrains-mono
     nerd-fonts.caskaydia-cove
+    nerd-fonts.sauce-code-pro
+    # "Symbols Nerd Font Mono": the default `nerd-icons-font-family'.  Emacs
+    # nerd-icons otherwise relies on `M-x nerd-icons-install-fonts' writing
+    # ~/.local/share/fonts/NFM.ttf, which Home Manager does not own.
+    nerd-fonts.symbols-only
 
     # Tools to help with nixpkg development...
     bundix

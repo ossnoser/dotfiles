@@ -104,12 +104,9 @@ in
   # ---------------------------------------------------------------------------
   # Bootloader
   # ---------------------------------------------------------------------------
-  # Fresh NixOS install on a single 4TB SSD with no dual-boot, so systemd-boot
-  # is the right pick (simpler than grub, no chainloading needed). If the box
-  # ever dual-boots, switch to the grub block used in hosts/xps15.
-  boot.loader.systemd-boot.enable = true;
-  boot.loader.efi.canTouchEfiVariables = true;
-  boot.loader.efi.efiSysMountPoint = "/boot";
+  # Fresh NixOS install on a single 4TB SSD with no dual-boot, so use systemd-boot
+  # default from ./nixos-boot-default.nix, imported via flake.nix. If the box ever
+  # dual-boots, override here with the grub block used in hosts/xps15.
 
   # ---------------------------------------------------------------------------
   # AMD AI / Lemonade (Strix Halo)
@@ -119,6 +116,7 @@ in
   # nixos-base.nix, so the amd-npu module's group requirement is met.
   hardware.amd-npu = {
     enable = true;
+    gpuTarget = "gfx1151";   # Strix Halo (default is gfx1150 / Strix Point)
     enableFastFlowLM = true;   # NPU (XDNA 2) inference runtime
     enableLemonade = true;     # OpenAI-compatible local AI server
     enableROCm = true;         # ROCm-backed llama.cpp / sd-cpp
@@ -143,44 +141,9 @@ in
       # is an additional chat frontend, not the only LAN-facing Lemonade path.
       host = "0.0.0.0";
       port = lemonadePort;
+      allowedOrigins = ["*"];
     };
   };
-
-  # ---------------------------------------------------------------------------
-  # sd-cpp (image generation) shared-library fix
-  # ---------------------------------------------------------------------------
-  # nix-amd-ai's `stable-diffusion-cpp-rocm` ships an `sd-server` binary with no
-  # RUNPATH, and the amd-npu module's lemond `LD_LIBRARY_PATH` carries only
-  # xrt + clr. So the ROCm image backend dies at launch with exit 127:
-  #   sd-server: error while loading shared libraries: libatomic.so.1
-  # (llama.cpp/whisper are unaffected: they resolve libs via their own RPATH.)
-  # We re-assert the module's library path (xrt core + xdna driver plugin +
-  # clr, mirroring its internal xrt-combined) and append gcc-libs
-  # (libatomic.so.1, libstdc++, libgomp); lemond forwards this to the
-  # sd-server child. Rebuilt from `pkgs` rather than the sibling env key to
-  # avoid module-system infinite recursion. nix-ld does NOT help here: sd-server
-  # is Nix-built and uses the Nix loader, not the /lib64 stub nix-ld intercepts.
-  # Drop once nix-amd-ai rpaths sd-server or adds gcc-libs to its ldLibraryPath
-  # (as of b304a013 its ldLibraryPath is still only xrt-combined + clr).
-  systemd.services.lemond.environment.LD_LIBRARY_PATH = lib.mkForce (
-    lib.concatStringsSep ":" [
-      "${pkgs.xrt}/opt/xilinx/xrt/lib"
-      "${pkgs.xrt-plugin-amdxdna}/opt/xilinx/xrt/lib"
-      "${pkgs.rocmPackages.clr}/lib"
-      "${pkgs.stdenv.cc.cc.lib}/lib"
-    ]
-  );
-
-  # ---------------------------------------------------------------------------
-  # WhisperServer runtime dir + kokoro nix-ld loader: now handled upstream.
-  # ---------------------------------------------------------------------------
-  # The lemond `RuntimeDirectory = "lemond"` (WhisperServer writable runtime
-  # dir), `programs.nix-ld.enable`, and the lemond `NIX_LD`/`NIX_LD_LIBRARY_PATH`
-  # env (so the kokoro TTS prebuilt ELF finds a real loader) were all merged
-  # into nix-amd-ai by PR #38 ("lemond runtime dir + nix-ld loader for omni
-  # backends") and are present from our pinned rev b304a013 onward, so the
-  # local workarounds were removed here. The sd-server LD_LIBRARY_PATH gcc-libs
-  # fix above is NOT yet upstream and is kept.
 
   # Keep the raw Lemonade API LAN-reachable for coding harness clients.
   # services.searx.openFirewall and services.open-webui.openFirewall add the

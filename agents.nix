@@ -6,7 +6,8 @@ let
   # The dotagents repo is registered as a git submodule of this checkout
   # under `agents/`. Its working tree provides every reusable skill,
   # extension, prompt, the pi-side AGENTS.md, and the user-local
-  # pi/settings.json (package list, default provider/model, secrets toggles).
+  # pi/settings.json (package list, default provider/model, secrets toggles)
+  # and pi/mcp.json (native MCP servers).
   # Whole-directory symlinks below point ~/.agents/skills, ~/.claude/skills,
   # ~/.pi/agent/extensions, ~/.pi/agent/skills, ~/.pi/agent/agents,
   # ~/.pi/agent/prompts, ~/.pi/agent/AGENTS.md, and ~/.pi/agent/settings.json
@@ -15,6 +16,7 @@ let
   agentsRoot = "${dotRoot}/agents";
   piRoot = "${agentsRoot}/pi";
   piSettings = "${piRoot}/settings.json";
+  piMcp = "${piRoot}/mcp.json";
   piModels = "${piRoot}/models.json";
 
   # ───────────────────────────── Dest paths ───────────────────────────────
@@ -58,22 +60,22 @@ in
 
     # ─────────────── pi/settings.json git clean filter ────────────────
     # The tracked `agents/pi/settings.json` is live-linked into ~/.pi/agent,
-    # and pi writes runtime state (lastChangelogVersion, defaultProvider,
-    # defaultModel) back into it on every /model swap or upgrade. dotagents
-    # marks the file `filter=pi-settings` in .gitattributes and ships
-    # install-git-filter.sh to register that filter, which strips the volatile
-    # keys at stage time (smudge = cat, so the working tree is untouched).
+    # and pi writes runtime state (lastChangelogVersion on upgrade, a
+    # per-installation deviceId) back into it. dotagents marks the file
+    # `filter=pi-settings` in .gitattributes and ships install-git-filter.sh
+    # to register that filter, which strips those keys at stage time
+    # (smudge = cat, so the working tree is untouched). defaultProvider and
+    # defaultModel are tracked: pi saves them only on Ctrl+S in /model.
     #
     # The filter *definition* lives in the submodule's .git/config, which is
     # not version-controlled, so every fresh clone needs it registered once --
     # easy to forget, and forgetting it means dirty-tree noise every session.
-    # Register it here, short-circuiting when already configured. Non-fatal:
-    # a failure warns rather than aborting activation.
+    # Run the installer on every activation: it exits early when the filter is
+    # current, so a changed field list reaches clones that already had the
+    # filter. Non-fatal: a failure warns rather than aborting activation.
     home.activation.installPiSettingsGitFilter =
       lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-        if [ -f "${agentsRoot}/install-git-filter.sh" ] && \
-           [ -z "$(${pkgs.git}/bin/git -C "${agentsRoot}" config --get filter.pi-settings.clean || true)" ]; then
-          echo "Registering pi-settings git clean filter in ${agentsRoot}"
+        if [ -f "${agentsRoot}/install-git-filter.sh" ]; then
           # cd into the submodule: the script resolves its target from
           # `git rev-parse --show-toplevel`, and activation's cwd is $HOME.
           if ! (cd "${agentsRoot}" && \
@@ -143,12 +145,10 @@ in
     ];
 
     home.packages = with pkgs; [
-      # Pi coding-agent. Provided by `pi.overlays.default` from the
-      # `lukasl-dev/pi.nix` flake input (replaces the older
-      # numtide/llm-agents.nix path which exposed `llm-agents.pi`).
-      # N.B. We're intentionally not using the agents home-manager based config module
-      #      for compatibility with our symlinking / live editable strategy for agent config
-      pi-coding-agent
+      # Pi coding-agent. Provided by `pi.overlays.default` from the upstream
+      # `earendil-works/pi` flake input (replaces the third-party
+      # lukasl-dev/pi.nix flake, which exposed `pi-coding-agent`).
+      pi
       claude-code
       codex
       # This is installed for linux only -- installed via homebrew on darwin
@@ -226,10 +226,6 @@ in
       ".local/bin/ot".source =
         config.lib.file.mkOutOfStoreSymlink "${agentsRoot}/skills/org-tasks/scripts/ot";
 
-      # Generic MCP config
-      "${config.xdg.configHome}/mcp/mcp.json".source =
-        config.lib.file.mkOutOfStoreSymlink "${agentsRoot}/mcp.json";
-
       # Pi-side discovery locations. AGENTS.md comes from the submodule's
       # `home/` layer -- the portable, project-agnostic rules. The submodule's
       # *root* AGENTS.md is the dotagents project file (maintenance specifics
@@ -250,6 +246,18 @@ in
       # submodule.
       "${piConfig}/settings.json".source =
         config.lib.file.mkOutOfStoreSymlink piSettings;
+
+      # Native pi MCP server configuration (pi-only keys such as `oauth.callbackUrl`
+      # and `description`), so it lives beside settings.json.
+      "${piConfig}/mcp.json".source =
+        config.lib.file.mkOutOfStoreSymlink piMcp;
+
+      # Same for the model catalogue. Its `providers.<id>.modelOverrides` is
+      # pi's topmost model layer, so it corrects extension-registered providers
+      # (e.g. the lemonade plugin's hardcoded 4096 `maxTokens`) without
+      # patching the extension.
+      "${piConfig}/models.json".source =
+        config.lib.file.mkOutOfStoreSymlink piModels;
     };
   };
 }

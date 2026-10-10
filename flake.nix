@@ -8,6 +8,14 @@
     self.submodules = true;
 
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+
+    # Emacs 30.2 pinned to nixpkgs @ 2026-08-25, scoped to Spacemacs only.
+    # Spacemacs is incompatible with Emacs 31.1; every other config (and PATH
+    # `emacs`) tracks the main nixpkgs input. A rev-pinned URL is immutable, so
+    # `nix flake update` cannot move it -- bump deliberately if Spacemacs is
+    # ever ported. Consumed only by editors/emacs/emacs.nix (`semacs`).
+    nixpkgs-spacemacs.url = "github:nixos/nixpkgs/ac6b2166e7a9375683b8e98f860f273222337b16";
+
     home-manager = {
       url = "github:nix-community/home-manager";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -35,7 +43,6 @@
       flake = false;
     };
 
-
     microchip = {
       url = "github:cormacc/nix-microchip";
       # url = "/home/cormacc/dev/nix-microchip";
@@ -47,9 +54,17 @@
 
     nur.url  = "github:nix-community/NUR";
     nix-amd-ai.url = "github:noamsto/nix-amd-ai";
-    pi.url = "github:lukasl-dev/pi.nix";
     claude-code.url = "github:sadjow/claude-code-nix";
+    codex-desktop.url = "github:ilysenko/codex-desktop-linux";
 
+    # Upstream pi flake. No binary cache: the overlay builds from source with
+    # `final.callPackage`, so following our nixpkgs costs nothing.
+    pi = {
+      url = "github:earendil-works/pi";
+      inputs.nixpkgs.follows = "nixpkgs";
+      # Only used for upstream's own packages.x86_64-darwin output.
+      inputs.nixpkgs-darwin-x64.follows = "nixpkgs-darwin";
+    };
     herdr = {
       url = "github:ogulcancelik/herdr";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -75,6 +90,7 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    nix-babashka.url = "github:cormacc/nix-babashka";
   };
 
   # NOTE: nixConfig must be a literal attrset of literals — nix parses it
@@ -90,7 +106,6 @@
     extra-substituters = [
       "https://cache.nixos.org"
       "https://nix-community.cachix.org"
-      "https://pi.cachix.org"
       "https://claude-code.cachix.org"
       "https://nix-amd-ai.cachix.org"
       #Not sure whether these last two are in use...
@@ -102,13 +117,12 @@
       "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs="
       "hyprland.cachix.org-1:a7pgxzMz7+chwVL3/pzj6jIBMioiJM7ypFP8PwtkuGc="
       "niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g="
-      "pi.cachix.org-1:lGeoGJaZ5ZDabuRzkcD5EBTNnDM4HJ1vqeOxlWk1Flk="
       "claude-code.cachix.org-1:YeXf2aNu7UTX8Vwrze0za1WEDS+4DuI2kVeWEE4fsRk="
       "nix-amd-ai.cachix.org-1:F4OU4vw/lV2oiG6SBHZ+nqjl4EFJuqI4X9A7pvaBmhQ="
     ];
   };
 
-  outputs = { self, nixpkgs, nixpkgs-darwin, home-manager, home-manager-darwin, nix-darwin, nix-homebrew, homebrew-core, homebrew-cask, microchip, claude-code, claude-desktop, hermes-agent, rust-overlay, nur, pi, dirge, herdr, nix-amd-ai, ... } @inputs:
+  outputs = { self, nixpkgs, nixpkgs-darwin, home-manager, home-manager-darwin, nix-darwin, nix-homebrew, homebrew-core, homebrew-cask, microchip, claude-code, claude-desktop, codex-desktop, hermes-agent, rust-overlay, nur, pi, dirge, herdr, nix-amd-ai, nix-babashka, ... } @inputs:
     let
       inherit (self) outputs;
       system = "x86_64-linux";
@@ -122,6 +136,7 @@
         nur.overlays.default
         pi.overlays.default
         rust-overlay.overlays.default
+        nix-babashka.overlays.default
         # Local packages: pkgs/<name>/default.nix -> pkgs.<name>
         (import ./pkgs/overlay.nix)
       ];
@@ -130,6 +145,7 @@
         dirge.overlays.default
         herdr.overlays.default
         pi.overlays.default
+        nix-babashka.overlays.default
       ];
       # pkgs = nixpkgs.legacyPackages.${system};
       pkgs = import nixpkgs {
@@ -137,11 +153,6 @@
         config = {
           allowUnfree = true;
           allowUnfreePredicate = _: true;
-          permittedInsecurePackages = [
-            #This is ignored...
-            "segger-jlink-qt4-810"
-          ];
-          segger-jlink.acceptLicense = true;
         };
         overlays = linuxOverlays;
       };
@@ -192,6 +203,7 @@
             inputs.nix-amd-ai.nixosModules.default
             ./hosts/strix/hardware-configuration.nix
             ./hosts/strix/nixos-configuration.nix
+            ./nixos-boot-default.nix
             ./nixos-workstation.nix
             ./nixos-gaming.nix
           ];
@@ -242,6 +254,7 @@
           inherit pkgs;
           modules = [
             ./home.nix
+            codex-desktop.homeManagerModules.default
           ];
           extraSpecialArgs = {
             cfgName = "default";

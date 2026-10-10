@@ -128,7 +128,7 @@ Acceptance shape (refine in planner pass):
 
 Origin:
 - Spun out of the `2026-05-28-explore-and-adopt-web-search-tooling` change-record while clarifying off-LAN/public exposure model.
-- Design reference: `~/dotfiles/design/home-network-infrastructure.org` § "Phase 2: Caddy ingress and internal DNS".
+- Design reference: [[file:design/home-network-infrastructure.org::*Phase 2: Caddy ingress and internal DNS]].
 - timestamp: [2026-05-29 Fri]
 - sender: agent
 
@@ -144,7 +144,7 @@ Origin:
 
 Expose a curated subset of home services to the public internet, using strix Caddy as the TLS terminator and UniFi as the WAN gateway with port-forward to Caddy. Blocked by the LAN Caddy task (`0e5c627e-1297-4609-8d11-5081c6dae485`) — needs Caddy already running internally before any public path is added.
 
-Per-service exposure policy (see `~/dotfiles/design/home-network-infrastructure.org` § "Per-service exposure model"):
+Per-service exposure policy (see [[file:design/home-network-infrastructure.org::*Per-service exposure model]]):
 
 | Service    | Public OK? | Reason                                              |
 |------------+------------+-----------------------------------------------------|
@@ -178,17 +178,3 @@ Origin:
 - Blocked by `0e5c627e-1297-4609-8d11-5081c6dae485` (LAN Caddy).
 - timestamp: [2026-05-29 Fri]
 - sender: agent
-
-** DONE Build limux from source to fix native-Wayland rendering
-CLOSED: [2026-06-16 Tue 11:46]
-:PROPERTIES:
-:CUSTOM_ID: 38bfcb27-efeb-4d35-9369-b359792489f0
-:CREATED: [2026-06-16 Tue 09:16]
-:STARTED: [2026-06-16 Tue 11:06]
-:END:
-:LOGBOOK:
-- Created [2026-06-16 Tue 09:16]
-- State "STARTED" from "TODO" [2026-06-16 Tue 11:06]
-- State "DONE" from "STARTED" [2026-06-16 Tue 11:46]
-:END:
-#+IMPORT: [[plan:2026-06-16-build-limux-from-source-to-fix-native-wa.org]]

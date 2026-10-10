@@ -1,0 +1,1369 @@
+#+TITLE: Minimal Emacs configuration
+#+AUTHOR: Cormac Cannon
+#+PROPERTY: header-args:emacs-lisp :results silent
+#+STARTUP: showall
+
+A literate, Evil-based Emacs configuration, small enough to read end to end.
+
+=init.el= tangles this file to =config.el= inside =~/.config/emacs=. The sources live in =dotfiles/editors/emacs/minimal/= and are symlinked out of the store, so an edit here takes effect on the next =emacs= launch.
+
+
+* Table of Contents                                       :TOC_3:
+- [[#header][Header]]
+- [[#startup][Startup]]
+  - [[#defaults][Defaults]]
+  - [[#run-time-state-hygiene-no-littering][Run-time state hygiene (no-littering)]]
+  - [[#optimisation][Optimisation]]
+  - [[#restore-open-buffers][Restore open buffers]]
+- [[#keybindings][Keybindings]]
+  - [[#evil][Evil]]
+  - [[#core-keybindings---leaders-and-prefixes][Core keybindings - leaders and prefixes]]
+  - [[#session][Session]]
+  - [[#editing-text][Editing text]]
+  - [[#expand-region][Expand region]]
+  - [[#simultaneous-editing-iedit][Simultaneous editing (iedit)]]
+  - [[#multiple-cursors][Multiple cursors]]
+  - [[#indentation][Indentation]]
+  - [[#parens][Parens]]
+- [[#layout-and-file-management][Layout and file management]]
+  - [[#windows][Windows]]
+  - [[#frames][Frames]]
+  - [[#buffers][Buffers]]
+  - [[#files][Files]]
+  - [[#file-manager-dirvish][File manager (dirvish)]]
+  - [[#project][Project]]
+  - [[#jump][Jump]]
+- [[#ui][UI]]
+  - [[#fonts][Fonts]]
+  - [[#themes][Themes]]
+  - [[#landing-page][Landing page]]
+- [[#completion][Completion]]
+  - [[#minibuffer][Minibuffer]]
+  - [[#consult][consult]]
+  - [[#corfu][corfu]]
+  - [[#embark-and-wgrep][embark and wgrep]]
+- [[#version-control][Version control]]
+- [[#tools][Tools]]
+  - [[#tree-sitter][Tree-sitter]]
+  - [[#editorconfig][editorconfig]]
+  - [[#eglot][eglot]]
+- [[#llm][LLM]]
+  - [[#eca][ECA]]
+- [[#file-format-support][File format support]]
+  - [[#org][Org]]
+  - [[#markdown][Markdown]]
+    - [[#live-preview-in-eww][Live preview in EWW]]
+- [[#language-support][Language support]]
+  - [[#clojure][Clojure]]
+  - [[#nix][Nix]]
+- [[#terminal-and-repl-states][Terminal and REPL states]]
+
+* Header
+
+Tangling concatenates blocks in order, so this must stay the first source block: Emacs reads the lexical-binding cookie from line 1 of =config.el=.
+
+#+begin_src emacs-lisp
+  ;;; config.el --- tangled from config.org -*- lexical-binding: t; -*-
+#+end_src
+
+* Startup
+** Defaults
+
+Transcribed from =sensible-defaults=. TODO: review magnars' defaults for more.
+
+#+begin_src emacs-lisp
+(setq-default indent-tabs-mode nil ; Never insert tabs
+              tab-width 2
+              fill-column 80
+              indicate-empty-lines t)
+
+(setq create-lockfiles nil
+      make-backup-files nil
+      uniquify-buffer-name-style 'forward
+      enable-recursive-minibuffers t
+      ;; Search and completion
+      xref-search-program 'ripgrep
+      read-extended-command-predicate #'command-completion-default-include-p
+      completion-cycle-threshold 3
+      ;; Buffer display and editing
+      require-final-newline t
+      sentence-end-double-space nil
+      ;; TAB always re-indents; see Keybindings > Indentation.
+      tab-always-indent t)
+
+;; UTF-8 please
+(setq locale-coding-system 'utf-8) ; pretty
+(set-terminal-coding-system 'utf-8) ; pretty
+(set-keyboard-coding-system 'utf-8) ; pretty
+(set-selection-coding-system 'utf-8) ; please
+(prefer-coding-system 'utf-8) ; with sugar on top
+
+;; Answering just 'y' or 'n' will do
+(defalias 'yes-or-no-p 'y-or-n-p)
+
+(column-number-mode 1)
+(global-so-long-mode 1)
+(delete-selection-mode 1)
+(minibuffer-depth-indicate-mode 1)
+
+(global-display-line-numbers-mode 1)
+(add-hook 'text-mode-hook (lambda () (setq truncate-lines nil)))
+(add-hook 'before-save-hook #'delete-trailing-whitespace)
+#+end_src
+
+** Run-time state hygiene (no-littering)
+
+=no-littering= keeps runtime state out of the top level of =~/.config/emacs=. It must load before any mode that reads or writes a state file, because those modes resolve their file variable when enabled: =recentf-mode= enabled first would save to =var/recentf-save.el= but read the empty default path. So this block comes first, and =:ensure (:wait t)= blocks until it has loaded.
+
+#+begin_src emacs-lisp
+  (use-package no-littering
+    :ensure (:wait t)
+    :demand t
+    :config
+    (setq custom-file (no-littering-expand-etc-file-name "custom.el"))
+    (when (file-exists-p custom-file) (load custom-file nil t))
+    (no-littering-theme-backups))
+#+end_src
+
+Session state (recent files, minibuffer history, cursor position, auto-revert) follows and picks up the =no-littering= paths.
+
+#+begin_src emacs-lisp
+(use-package recentf
+  :ensure nil
+  :init (setq recentf-max-saved-items 200)
+  :config (recentf-mode 1))
+
+(use-package savehist
+  :ensure nil
+  :config (savehist-mode 1))
+
+(use-package saveplace
+  :ensure nil
+  :config (save-place-mode 1))
+
+(use-package autorevert
+  :ensure nil
+  ;;Auto-refresh dired, quietly
+  :init (setq global-auto-revert-non-file-buffers t
+              auto-revert-verbose nil
+              ;; Poll instead of inotify: a writer that truncates then writes
+              ;; emits two `changed' events, and `auto-revert-notify-handler'
+              ;; reverts on the first one (the 2.5s lockout only throttles the
+              ;; later ones), so the buffer can be filled from the 0-byte file.
+              auto-revert-use-notify nil)
+  ;;Auto-refresh file buffers
+  :config (global-auto-revert-mode 1))
+#+end_src
+
+** Optimisation
+
+Embedded from [[https://github.com/magnars/emacsd-reboot/blob/main/settings/fast-startup.el][magnars/emacsd-reboot]].
+
+#+begin_src emacs-lisp
+
+;; Set garbage collection threshold high for startup
+(setq gc-cons-threshold (* 1024 1024 100))
+
+;; Set file-name-handler-alist
+(setq file-name-handler-alist-original file-name-handler-alist)
+(setq file-name-handler-alist nil)
+
+;; Keep tabs on startup time
+(add-hook 'emacs-startup-hook
+          (lambda ()
+            (message "Emacs ready in %s with %d garbage collections."
+                     (format "%.2f seconds"
+                             (float-time
+                              (time-subtract after-init-time before-init-time)))
+                     gcs-done)))
+
+;; Reset to a lower value once startup has completed
+(run-with-idle-timer
+   5 nil
+   (lambda ()
+     (setq gc-cons-threshold (* 1024 1024 20))
+     (setq file-name-handler-alist file-name-handler-alist-original)
+     (makunbound 'file-name-handler-alist-original)))
+#+end_src
+
+** Restore open buffers
+
+=SPC q r= (=restart-emacs=) runs =kill-emacs-hook=, where =desktop-save-mode= has installed =desktop-kill=, so saving needs nothing but the mode. =desktop-restore-frames= (default t) carries the window layout, not just the buffer list. Paths come from [[#run-time-state-hygiene-no-littering][no-littering]] (=var/desktop/=), so this block must stay after it.
+
+The built-in path does not work here: =desktop.el= calls =desktop-read= from =after-init-hook=, which is where =init.el= runs =elpaca-process-queues=, so buffers needing an Elpaca package would restore into =fundamental-mode=. Restore on =elpaca-after-init-hook= instead. The built-in entry is guarded by ~(when desktop-save-mode ...)~, so the mode must *not* be on at load time or the desktop is read twice; only =my/restore-session= enables it.
+
+=desktop-save= is t so a restart never asks. =desktop-load-locked-desktop= is ='check-pid=: a clean restart releases the lock, so this only applies after a crash (stale PID, load silently) or with a second live Emacs on the same directory (refuse). The default ='ask= prompts after every crash and, via ~(unless (daemonp) (y-or-n-p ...))~, silently refuses under a daemon. ='check-pid= is only unsafe on a remote =desktop-dirname=; =var/desktop/= is local.
+
+The dashboard covers a fresh start. =my/desktop-available-p= is snapshotted at load time, before anything can write a desktop file, and [[#landing-page][Landing page]] does no startup wiring of its own; otherwise =dashboard-setup-startup-hook= would put =dashboard-initialize= on =emacs-startup-hook= and leave a =*dashboard*= buffer behind a restored layout.
+
+Desktop restores file-backed buffers plus modes with a =desktop-buffer-mode-handlers= entry: Dired yes, Magit no, and the [[#terminal-and-repl-states][Terminal and REPL states]] buffers do not come back.
+
+#+begin_src emacs-lisp
+  (defvar my/desktop-available-p nil
+    "Non-nil when a saved desktop existed at startup.
+Snapshotted before `desktop-save-mode' can write one, so it stays a
+statement about the previous session.")
+
+  (use-package desktop
+    :ensure nil
+    :demand t
+    :init
+    (setq desktop-save t
+          desktop-load-locked-desktop 'check-pid
+          desktop-restore-frames t)
+    :config
+    (setq my/desktop-available-p (file-exists-p (desktop-full-file-name))))
+
+  (defun my/restore-session ()
+    "Restore the saved desktop, or build the dashboard when there is none.
+Runs from `elpaca-after-init-hook', once every package is installed and
+activated, so restored buffers get their real major modes."
+    (desktop-save-mode 1)
+    (if my/desktop-available-p
+        (desktop-read)
+      (dashboard-setup-startup-hook)
+      (dashboard-insert-startupify-lists)
+      (dashboard-initialize)))
+
+  (add-hook 'elpaca-after-init-hook #'my/restore-session)
+#+end_src
+
+* Keybindings
+general.el, which-key and evil.
+#+begin_src emacs-lisp
+(use-package general
+  :ensure (:wait t)
+  :demand t
+  :config
+  (general-evil-setup))
+
+(use-package which-key
+  :ensure nil
+  :init
+  (setq which-key-idle-delay 0.3
+        which-key-sort-order 'which-key-key-order-alpha)
+  :config
+  (which-key-mode 1))
+#+end_src
+
+** Evil
+=evil-collection= supplies third-party bindings and =evil-surround= the =cs"'= family. =evil-want-keybinding= must be nil before =evil= loads for =evil-collection= to take over. =undo-redo= is native undo (Emacs 28+), so no =undo-tree=.
+
+#+begin_src emacs-lisp
+  (use-package evil
+    :ensure t
+    :demand t
+    :init
+    (setq evil-want-integration t
+          evil-want-keybinding nil
+          evil-want-C-u-scroll t
+          evil-want-Y-yank-to-eol t
+          evil-undo-system 'undo-redo
+          evil-respect-visual-line-mode t
+          evil-split-window-below t
+          evil-vsplit-window-right t
+          evil-search-module 'evil-search)
+    :config
+    (evil-mode 1))
+
+  (use-package evil-collection
+    :ensure t
+    :after evil
+    :demand t
+    :config
+    (evil-collection-init))
+
+  (use-package evil-surround
+    :ensure t
+    :after evil
+    :demand t
+    :config
+    (global-evil-surround-mode 1))
+#+end_src
+
+** Core keybindings - leaders and prefixes
+- =SPC= is the global leader in normal/visual/motion states.
+- =,= is the local (major-mode) leader.
+- =C-SPC= and =C-,= are the insert-state equivalents.
+- =SPC m= is bound below as an alias for =,=.
+
+Top-level prefixes are created here. Subject sections add their nested prefixes and leaves beside the commands they expose.
+
+Labels use which-key's keymap-based replacement, not general's =:which-key= keyword: the description lives in the keymap entry instead of being string-matched in ~which-key-replacement-alist~ at display time (general's own recommendation). The two forms:
+- a command --- ="k" '("description" . command)=
+- a prefix --- ="k" (cons "description" (make-sparse-keymap))=
+
+#+begin_src emacs-lisp
+;; Elpaca installs asynchronously -- block here to make sure general.el and evil.el installed
+(elpaca-wait)
+
+(general-create-definer my/leader
+      :states '(normal visual motion emacs)
+      :keymaps 'override
+      :prefix "SPC"
+      :global-prefix "C-SPC")
+
+(general-create-definer my/local-leader
+      :states '(normal visual)
+      :prefix ","
+      :global-prefix "C-,")
+
+(my/leader
+  "SPC" '("M-x" . execute-extended-command)
+  "h"   (cons "help" help-map)
+  "h E"   (cons "Evil keymaps" (make-sparse-keymap))
+  "h E n" '("normal" . (lambda () (interactive) (describe-keymap evil-normal-state-map)))
+  "h E i" '("insert" . (lambda () (interactive) (describe-keymap evil-insert-state-map)))
+  "h E v" '("visual" . (lambda () (interactive) (describe-keymap evil-visual-state-map)))
+  "h E m" '("motion" . (lambda () (interactive) (describe-keymap evil-motion-state-map)))
+  ";"   (cons "comment" (make-sparse-keymap))
+  "q"   (cons "quit" (make-sparse-keymap))
+  "w"   (cons "windows" (make-sparse-keymap))
+  "F"   (cons "frames" (make-sparse-keymap))
+  "b"   (cons "buffers" (make-sparse-keymap))
+  "f"   (cons "files" (make-sparse-keymap))
+  "f e" (cons "emacs config" (make-sparse-keymap))
+  "j"   (cons "jump" (make-sparse-keymap))
+  "s"   (cons "search" (make-sparse-keymap))
+  "g"   (cons "git" (make-sparse-keymap))
+  "p"   (cons "project" (make-sparse-keymap))
+  "a"   (cons "ai" (make-sparse-keymap))
+  "t"   (cons "toggles" (make-sparse-keymap)))
+#+end_src
+
+=SPC m= re-dispatches =,= so the local-leader menu is reachable from the global leader. Defined after the table because =general-simulate-key= returns a command that must exist when the binding is made.
+
+#+begin_src emacs-lisp
+  (my/leader
+    "m" (general-simulate-key "," :which-key "local leader"))
+#+end_src
+
+** Session
+:PROPERTIES:
+:CUSTOM_ID: session
+:END:
+Order inside =my/quit-emacs= is load-bearing. =desktop-save-mode= goes off first, which makes the =desktop-kill= entry on =kill-emacs-query-functions= a no-op; only then is the file removed. The other way round hits ~(unless desktop-dirname (read-directory-name ...))~ in =desktop-kill= and turns quitting into a prompt. The file is deleted directly rather than with =desktop-remove=, which nulls =desktop-dirname= and would leave =desktop--on-kill= resolving the lock name against nothing.
+
+An unclean exit still leaves a desktop behind; only a deliberate quit discards the session.
+
+#+begin_src emacs-lisp
+  (defun my/quit-emacs ()
+    "Quit Emacs, discarding the saved session.
+The next launch starts fresh; use \\[restart-emacs] to come back to this one."
+    (interactive)
+    (desktop-save-mode 0)
+    (let ((file (desktop-full-file-name)))
+      (desktop-release-lock)
+      (when (file-exists-p file) (delete-file file)))
+    (save-buffers-kill-terminal))
+
+  (my/leader
+    "q q" '("quit emacs" . my/quit-emacs)
+    "q r" '("restart emacs" . restart-emacs))
+#+end_src
+
+** Editing text
+#+begin_src emacs-lisp
+(my/leader
+  "; ;" '("comment dwim" . comment-dwim))
+#+end_src
+
+** Expand region
+:PROPERTIES:
+:CUSTOM_ID: expand-region
+:END:
+
+[[https://github.com/magnars/expand-region.el][expand-region]] grows the selection one semantic unit at a time --- symbol, string, inside the delimiters, the sexp, the defun --- where an Evil text object needs the shape named up front. =SPC e= starts it; then =e= expands again, =-= contracts and =0= resets. The repeat key is the last key of the invoking sequence, which is what makes it =e= here; =-= and =0= are the upstream =expand-region-contract-fast-key= and =expand-region-reset-fast-key= defaults (Spacemacs' =V= / =r= remap sits inside their helm-ag branch, so it does not apply).
+
+No Evil wrapper is needed. expand-region activates the mark, Evil's =evil-visual-activate-hook= then enters visual state, and the visual selection matches the unit exactly. Measured on =(defun f (x) (+ x 1))= with point at =x 1=: =SPC e= selects =x=, then =e= gives =+ x 1=, =e= gives =(+ x 1)=, =e= gives =defun f (x) (+ x 1)=; at that point =d= deletes =(+ x 1)= and =c= replaces it. Starting from a selection behaves the same (=v i w SPC e= gives =+ x 1=). While visual state is inclusive, =region-end= reads one character short of the selection --- Evil's operators use =evil-visual-end=, so only code that inspects the region needs to know.
+
+The selection is a live region, so it feeds the next two sections: =SPC s e= takes it as the [[#iedit][iedit]] occurrence, and =SPC s m a= as the [[#multiple-cursors][multiple-cursors]] match.
+
+=evil-iedit-state= also advises expand-region to add "=e= to edit", but expand-region defines the repeat key last, so =e= expands: measured, pressing =e= went from =x= to =+ x 1= with =iedit-mode= still nil. The echo-area hint still advertises it; =SPC s e= is the way in.
+
+#+begin_src emacs-lisp
+  (use-package expand-region
+    :ensure t
+    :commands (er/expand-region))
+
+  (my/leader
+    "e" '("expand region" . er/expand-region))
+#+end_src
+
+** Simultaneous editing (iedit)
+:PROPERTIES:
+:CUSTOM_ID: iedit
+:END:
+
+[[https://github.com/victorhge/iedit][iedit]] edits every occurrence of a symbol at once, and [[https://github.com/syl20bnr/evil-iedit-state][evil-iedit-state]] wraps it in the two Evil states Spacemacs uses, so =SPC s e= works as it does there.
+
+What starts: from visual state the selection is the occurrence; from normal state it is the thing at point (=iedit-default-occurrence= --- symbol, word, url, email or markup tag); =C-u SPC s e= recovers the occurrence from the last iedit in this buffer, =C-u C-u SPC s e= the last one in any buffer; =M-0 SPC s e= limits the match to the current function.
+
+=iedit state= inherits normal state, so ordinary motions still work. On top: =n= / =N= next and previous occurrence, =gg= / =G= first and last, =0= / =$= start and end of the occurrence, =TAB= toggle the occurrence at point, =D= delete the occurrences, =S= delete them and enter =iedit-insert state=, =p= replace them with the last yank, =F= / =L= restrict the scope to the function or the line, =J= / =K= grow it one line down or up, =#= number the occurrences, =V= hide the lines with no occurrence, =U= up-case and =C-S-u= down-case. =ESC= or =C-g= leaves; from =iedit-insert state=, =ESC= returns to =iedit state= and =C-g= goes straight to normal state.
+
+=iedit= is in the tree already as a [[#clojure][lispy]] dependency, but it is declared here because =iedit-toggle-key-default= must be nil before it loads: iedit otherwise claims the global =C-;= and starts plain =iedit-mode=, outside the Evil state.
+
+=evil-iedit-state= carries a 2014 copy of =iedit-done=, redefined only to stop iedit pushing the occurrence onto the kill ring. iedit has had =iedit-auto-save-occurrence-in-kill-ring= for that since, and its own =iedit-done= has moved on: the copy drops the =iedit-occurrence-type-global= hand-over that =C-u C-u= reads back, drops the =widen= that ends a scope narrowed under =iedit-auto-narrow=, and repeats buffering cleanup that =iedit-lib-cleanup= now does with kmacro support. Loading =iedit= again after the package restores the upstream definition, and the option covers the kill ring.
+
+#+begin_src emacs-lisp
+  (use-package iedit
+    :ensure t
+    :commands (iedit-mode)
+    :init
+    (setq iedit-toggle-key-default nil
+          iedit-auto-save-occurrence-in-kill-ring nil))
+
+  (use-package evil-iedit-state
+    :ensure t
+    :commands (evil-iedit-state/iedit-mode)
+    :config
+    ;; Put the upstream `iedit-done' back over the package's stale copy.
+    (load "iedit" nil t))
+
+  (my/leader
+    "s e" '("iedit occurrences" . evil-iedit-state/iedit-mode))
+#+end_src
+
+** Multiple cursors
+:PROPERTIES:
+:CUSTOM_ID: multiple-cursors
+:END:
+
+[[https://github.com/magnars/multiple-cursors.el][multiple-cursors]] puts a real cursor at several places at once, for the cases [[#iedit][iedit]] does not cover: text that differs between the occurrences, one cursor per line of a selection, and numbering or sorting the regions. Bindings follow the Spacemacs =multiple-cursors= layer, whose =mc= backend they are taken from.
+
+multiple-cursors is an Emacs-region tool, not an Evil one, and that decides the workflow. Its entry points test =region-active-p=, and Evil normal state leaves =transient-mark-mode= nil, so =mc/mark-all-like-this= called from normal state fails with "Mark a region to match first". Start from *visual state*:
+
+1. select the text (=v e=, =v i w=, =V j j= for whole lines);
+2. =SPC s m a= (or =b=, or =r= for one cursor per line);
+3. =ESC= to leave visual state --- the cursors stay;
+4. =i=, =I= or =A=, then type: the insertion is mirrored at every cursor;
+5. =ESC=, then =C-g= (or =SPC s m q=) to end multiple-cursors editing.
+
+Evil *operators* are the part that does not carry over, because =mc/cursor-specific-vars= tracks 21 variables for each fake cursor and not one of them belongs to Evil. Measured on =foo foo foo= with a cursor on each match: =ciw bar= gives =bar baro baro=, =x= gives =fo o o=, =dw= gives =fobar o bar o bar=. Insert-state typing, =A=, =mc/edit-lines= and =mc/insert-numbers= are all correct. So: iedit for renaming a symbol, multiple-cursors for typing the same new text in several places, and no evil operator in between.
+
+=mc/always-run-for-all= is t, as in the Spacemacs layer. With the default whitelist, mc asks "execute for all cursors?" for every command it does not know, and under Evil almost every command is one it does not know: =mc--default-cmds-to-run-for-all= holds 77 entries and none of them is an Evil command. The cost is that commands are mirrored per cursor, so a leader command that opens a UI runs once per cursor --- hence the additions to =mc/cmds-to-run-once= below, which is also the escape hatch for anything else that misbehaves.
+
+=mc/keymap= is a minor-mode map, and it outranks Evil's state maps: measured with cursors active, =C-g= reaches =mc/keyboard-quit= and =<return>= reaches =multiple-cursors-mode= in both normal and insert state. That =<return>= binding ends the session instead of inserting a newline, and only in a graphical frame --- a terminal sends =RET=, which mc does not bind. It is unbound here, so RET inserts a newline at every cursor in either kind of frame, and =C-g= remains the way out. =ESC= is left alone: bound in =mc/keymap= it would shadow Evil's own insert-state exit.
+
+[[#run-time-state-hygiene-no-littering][no-littering]] already points =mc/list-file= at =var/mc-list.el=, so the whitelist answers do not land at the top of =~/.config/emacs=.
+
+#+begin_src emacs-lisp
+  (use-package multiple-cursors
+    :ensure t
+    :commands (mc/mark-all-dwim mc/mark-all-like-this mc/mark-more-like-this-extended
+               mc/edit-lines mc/insert-letters mc/insert-numbers mc/mark-sgml-tag-pair
+               mc/sort-regions mc/reverse-regions set-rectangular-region-anchor
+               mc/keyboard-quit)
+    :init
+    (setq mc/always-run-for-all t)
+    :config
+    ;; RET types a newline at every cursor; C-g ends the session.
+    (keymap-unset mc/keymap "<return>" t)
+    ;; Commands that open a UI, and so must not run once per cursor.
+    (dolist (cmd '(consult-line consult-buffer consult-ripgrep consult-recent-file
+                   embark-act magit-status project-find-file project-switch-project
+                   eca eca-chat-toggle-window my/quit-emacs restart-emacs))
+      (add-to-list 'mc/cmds-to-run-once cmd)))
+
+  (my/leader
+    "s m"   (cons "multiple cursors" (make-sparse-keymap))
+    "s m a" '("mark all dwim" . mc/mark-all-dwim)
+    "s m b" '("mark all like this" . mc/mark-all-like-this)
+    "s m m" '("mark more (extended)" . mc/mark-more-like-this-extended)
+    "s m r" '("one cursor per line" . mc/edit-lines)
+    "s m q" '("stop cursors" . mc/keyboard-quit)
+    "s m s"   (cons "specials" (make-sparse-keymap))
+    "s m s l" '("insert letters" . mc/insert-letters)
+    "s m s m" '("mark sgml tag pair" . mc/mark-sgml-tag-pair)
+    "s m s n" '("insert numbers" . mc/insert-numbers)
+    "s m s r" '("rectangular anchor" . set-rectangular-region-anchor)
+    "s m s s" '("sort regions" . mc/sort-regions)
+    "s m s t" '("reverse regions" . mc/reverse-regions))
+#+end_src
+
+** Indentation
+:PROPERTIES:
+:CUSTOM_ID: indentation
+:END:
+
+=indent-for-tab-command= is the single context-aware entry point: it delegates to the buffer-local =indent-line-function=, and to =indent-region= when a region is active. =tab-always-indent= is =t= ([[#defaults][Defaults]]) rather than the more usual ='complete=, so TAB re-indents the line wherever point sits, instead of completing once the line is already indented. [[#corfu][corfu]] pops up by itself after two characters, and the global =M-TAB= (=completion-at-point=) covers an explicit request.
+
+Where the level comes from, per buffer:
+
+- =*-ts-mode= (nix, C, python, and code blocks in markdown) --- =treesit-indent=, i.e. the nesting depth of the node at point in the syntax tree.
+- Lisps --- =lisp-indent-line= / =clojure-indent-line=, from the sexp nesting and each symbol's indent spec.
+- Org --- =org-indent-line=, aligned to the enclosing headline, list item or block. TAB stays =org-cycle=: with =org-cycle-emulate-tab= at its default =t=, =org-cycle= calls the /global/ TAB binding when point is off a headline, so the same =indent-for-tab-command= runs there.
+- =markdown-ts-mode= --- TAB is =markdown-ts-outline-cycle= (visibility on a headline, nothing elsewhere), =markdown-ts-table-next-cell= in a table, and =indent-for-tab-command= in a fenced code block, where the embedded language's tree-sitter rules apply.
+
+Eglot adds no indentation: LSP has document and range formatting only, with no per-line indent request, so server-side layout stays on =, == (=eglot-format-buffer=) in [[#eglot][eglot]].
+
+Evil leaves TAB out of normal state, so without a binding a line can only be re-indented from insert state. =<tab>= is bound instead of =TAB=: the two are distinct events in a graphical frame, so =C-i= keeps =evil-jump-forward= (=evil-want-C-i-jump= is t by default). A terminal frame cannot tell them apart, and there =TAB= jumps rather than indents; =evil-indent= (===) is the fallback in either frame.
+
+=prog-mode-map= scopes it to programming buffers, so markup modes keep the TAB behaviour described above, and any major mode that binds =<tab>= itself still wins over this.
+
+#+begin_src emacs-lisp
+  (general-define-key
+   :states '(normal visual)
+   :keymaps 'prog-mode-map
+   "<tab>" '("indent line/region" . indent-for-tab-command))
+#+end_src
+
+
+** Parens
+We want to auto-insert matching parens by default.
+
+#+begin_src emacs-lisp
+(use-package elec-pair
+  :ensure nil
+  :config
+  (electric-pair-mode 1))
+
+;; Toggle electric pairs on / off (on by default)
+(my/leader
+  "t p" '("electric pairs" . electric-pair-local-mode))
+#+end_src
+
+* Layout and file management
+** Windows
+:PROPERTIES:
+:CUSTOM_ID: windows
+:END:
+
+=winum= numbers the windows for =SPC 1= .. =SPC 0=; =winner= backs =SPC w u=. The rest of =SPC w= is built-in and evil window motion.
+
+Ten near-identical which-key rows are noise, so the =window 1= row is relabelled to cover the range and the other nine are hidden (a non-cons replacement such as =t= drops the binding from the popup). The rules match on the description, so they hold for both the =SPC= and =C-SPC= leaders. This is the one job keymap-based replacement cannot do, because it rewrites the key text rather than the description.
+
+#+begin_src emacs-lisp
+  (use-package winum
+    :ensure t
+    :demand t
+    :init
+    (setq winum-auto-setup-mode-line nil
+          winum-scope 'frame-local)
+    :config
+    (winum-mode 1))
+
+  (use-package winner
+    :ensure nil
+    :config
+    (winner-mode 1))
+
+  (defun my/toggle-maximize-window ()
+    "Maximize the selected window, or restore the previous layout."
+    (interactive)
+    (if (and (= 1 (length (window-list)))
+             (assq ?_ register-alist))
+        (jump-to-register ?_)
+      (window-configuration-to-register ?_)
+      (delete-other-windows)))
+
+  (my/leader
+    "w b" '("Goto minibuffer" . switch-to-minibuffer)
+    "w v" '("split right" . split-window-right)
+    "w s" '("split below" . split-window-below)
+    "w d" '("delete" . delete-window)
+    "w m" '("maximize toggle" . my/toggle-maximize-window)
+    "w w" '("other window" . other-window)
+    "w h" '("focus left" . evil-window-left)
+    "w j" '("focus down" . evil-window-down)
+    "w k" '("focus up" . evil-window-up)
+    "w l" '("focus right" . evil-window-right)
+    "w H" '("move left" . evil-window-move-far-left)
+    "w J" '("move down" . evil-window-move-very-bottom)
+    "w K" '("move up" . evil-window-move-very-top)
+    "w L" '("move right" . evil-window-move-far-right)
+    "w =" '("balance" . balance-windows)
+    "w u" '("winner undo" . winner-undo)
+
+    "1"   '("window 1" . winum-select-window-1)
+    "2"   '("window 2" . winum-select-window-2)
+    "3"   '("window 3" . winum-select-window-3)
+    "4"   '("window 4" . winum-select-window-4)
+    "5"   '("window 5" . winum-select-window-5)
+    "6"   '("window 6" . winum-select-window-6)
+    "7"   '("window 7" . winum-select-window-7)
+    "8"   '("window 8" . winum-select-window-8)
+    "9"   '("window 9" . winum-select-window-9)
+    "0"   '("window 0" . winum-select-window-0-or-10))
+
+  ;; Show one "0..9" row for the winum window pickers instead of ten rows.
+  ;; The key text is rewritten in place, so any leader prefix is preserved;
+  ;; `which-key--extract-key' displays the last space-delimited token.
+  (add-to-list 'which-key-replacement-alist
+               '((" 1\\'" . "\\`window 1\\'") . (" 0..9" . "select window")))
+  (add-to-list 'which-key-replacement-alist
+               '((nil . "\\`window [02-9]\\'") . t))
+#+end_src
+
+** Frames
+:PROPERTIES:
+:CUSTOM_ID: frames
+:END:
+
+Adapted from the Spacemacs =SPC F= group, (=layers/+spacemacs/spacemacs-defaults/keybindings.el:396-406=). Everything here is built in, so no package is needed.
+
+A frame layout survives a restart without any setting of its own --- =desktop-restore-frames= is t in [[#restore-open-buffers][Restore open buffers]].
+
+#+begin_src emacs-lisp
+  (my/leader
+    "F d" '("delete frame" . delete-frame)
+    "F D" '("delete other frames" . delete-other-frames)
+    "F n" '("make frame" . make-frame)
+    "F o" '("other frame" . other-frame))
+#+end_src
+
+** Buffers
+:PROPERTIES:
+:CUSTOM_ID: buffers
+:END:
+
+All built-in; =SPC b b= is added by consult in [[#completion][Completion]].
+
+#+begin_src emacs-lisp
+  (defun my/alternate-buffer ()
+    "Switch to the most recently visited other buffer."
+    (interactive)
+    (switch-to-buffer (other-buffer (current-buffer) t)))
+
+  (my/leader
+    "TAB" '("alternate buffer" . my/alternate-buffer)
+    "b d" '("kill buffer" . kill-current-buffer)
+    "b n" '("next buffer" . next-buffer)
+    "b p" '("previous buffer" . previous-buffer)
+    "b r" '("revert" . revert-buffer-quick)
+    "b s" '("scratch" . scratch-buffer)
+    "b f" '("buffer other frame" . switch-to-buffer-other-frame)
+    "b F" '("display buffer other frame" . display-buffer-other-frame))
+#+end_src
+
+** Files
+:PROPERTIES:
+:CUSTOM_ID: files
+:END:
+
+All built-in; =SPC f r= is added by consult in [[#completion][Completion]]. =SPC f e e= opens this file.
+
+#+begin_src emacs-lisp
+(defun my/find-literate-config ()
+  "Open this configuration's `config.org'."
+  (interactive)
+  (find-file (expand-file-name "config.org" user-emacs-directory)))
+
+(defun my/find-emacs-nix ()
+  "Open this configuration's `emacs.nix'."
+  (interactive)
+  (find-file (expand-file-name "~/dotfiles/editors/emacs/emacs.nix")))
+
+
+(my/leader
+  "f f" '("find file" . find-file)
+  "f F" '("find file other frame" . find-file-other-frame)
+  "f s" '("save" . save-buffer)
+  "f S" '("save all" . save-some-buffers)
+  "f e e" '("config.org" . my/find-literate-config)
+  "f e n" '("emacs.nix" . my/find-emacs-nix))
+#+end_src
+
+** File manager (dirvish)
+:PROPERTIES:
+:CUSTOM_ID: dirvish
+:END:
+
+[[https://github.com/alexluigit/dirvish][dirvish]] is a session layer over Dired, not a replacement major mode. =dirvish-override-dired-mode= advises seven Dired entry points (=dired-noselect=, =dired--find-file=, =wdired-change-to-dired-mode= and four others), and =dirvish--setup-dired= calls ~(use-local-map dirvish-mode-map)~; the buffer stays in =dired-mode=. So every Dired buffer gains the attributes, preview pane and mode line, and no separate =dirvish-mode= exists.
+
+=:demand t= rather than deferred: the override has to be installed before =my/restore-session= runs on =elpaca-after-init-hook= ([[#restore-open-buffers][Restore open buffers]]), or the Dired buffers that =desktop= restores come back as plain Dired.
+
+=dired-listing-switches= uses long flag names on purpose. =dirvish-ls-switches-menu= and =dirvish-quicksort= decompose this string, and the short forms (=-A=, =-v=) defeat that. GNU =ls= is required; Emacs 31 already selects =gls= on macOS when it is installed, so =insert-directory-program= needs no setting here.
+
+=dirvish-quick-access-entries= is set with =:custom=, not =setq=: its =:set= function re-evaluates the =dirvish-quick-access= transient prefix, so a plain assignment leaves the old menu in place.
+
+Every Evil binding goes on =dired-mode-map=, never on =dirvish-mode-map=. =evil-get-auxiliary-keymap= resolves a state's bindings with ~(lookup-key map [normal-state])~, and =lookup-key= follows the parent chain, so one auxiliary keymap on =dired-mode-map= serves both maps and merges with what evil-collection's =dired= module already binds there. An auxiliary keymap on the child would be found first and take the parent's out of reach. evil-collection 3.0.1 ships no =dirvish= module and needs none.
+
+The single-letter Dired keys are evil-collection's (=a=, =o=, =r=, =^= are all taken), so the transient menus sit behind the local leader, as they do for org, markdown and eglot. =<tab>= toggles a subtree; =TAB= stays unbound so =C-i= keeps =evil-jump-forward= in a terminal frame ([[#indentation][Indentation]]).
+
+=q= is re-bound because evil-collection maps it to =quit-window= (its =quit= theme entry, =:key "q"=).
+
+Preview helpers (=vipsthumbnail=, =ffmpegthumbnailer=, =mediainfo=, =pdftoppm=, =magick=) come from =home.packages= in [[file:~/dotfiles/editors/emacs/emacs.nix][emacs.nix]]; dirvish warns once per missing program. =fd= is =programs.fd.enable= in =shell/shell.nix= and backs =dirvish-large-directory-threshold=.
+
+#+begin_src emacs-lisp
+(use-package dired
+  :ensure nil
+  :init
+  (setq dired-listing-switches
+        "-l --almost-all --human-readable --group-directories-first --no-group"
+        dired-kill-when-opening-new-dired-buffer t)
+  :config
+  ;; Lets `dirvish-side' close its own window when it opens a file.
+  (put 'dired-find-alternate-file 'disabled nil))
+
+(use-package dirvish
+  :ensure t
+  :demand t
+  :custom
+  ;; `:set' rebuilds the transient prefix, so `setq' would not take effect.
+  (dirvish-quick-access-entries
+   '(("h" "~/"               "Home")
+     ("d" "~/Downloads/"     "Downloads")
+     ("f" "~/dotfiles/"      "dotfiles")
+     ("p" "~/dev/"           "dev")
+     ("e" "~/.config/emacs/" "Emacs")))
+  :init
+  ;; Order matters: the first four share one position, the rest follow it.
+  (setq dirvish-attributes
+        '(vc-state subtree-state nerd-icons collapse file-time file-size)
+        dirvish-side-attributes
+        '(vc-state nerd-icons collapse file-size)
+        dirvish-mode-line-format '(:left (sort symlink) :right (omit yank index))
+        ;; Hand directories this large to `dirvish-fd' instead of `ls'.
+        dirvish-large-directory-threshold 20000)
+  :config
+  (dirvish-override-dired-mode 1)
+  ;; Side window tracks the current buffer, like `treemacs-follow-mode'.
+  (dirvish-side-follow-mode 1)
+
+  (my/local-leader
+    :keymaps 'dired-mode-map
+    ""  (cons "dirvish" (make-sparse-keymap))
+    "?" '("cheatsheet" . dirvish-dispatch)
+    "a" '("attributes" . dirvish-setup-menu)
+    "e" '("pin files" . dirvish-emerge-menu)
+    "f" '("file info" . dirvish-file-info-menu)
+    "h" '("history" . dirvish-history-jump)
+    "l" '("ls switches" . dirvish-ls-switches-menu)
+    "m" '("mark" . dirvish-mark-menu)
+    "n" '("narrow" . dirvish-narrow)
+    "o" '("quick access" . dirvish-quick-access)
+    "s" '("sort" . dirvish-quicksort)
+    "v" '("version control" . dirvish-vc-menu)
+    "y" '("yank" . dirvish-yank-menu)
+    "w" (cons "window" (make-sparse-keymap))
+    "w w" '("layout toggle" . dirvish-layout-toggle)
+    "w n" '("next layout" . dirvish-layout-switch))
+
+  (general-define-key
+   :states '(normal visual)
+   :keymaps 'dired-mode-map
+   "q"     '("quit session" . dirvish-quit)
+   "<tab>" '("toggle subtree" . dirvish-subtree-toggle)
+   "M-f"   '("history forward" . dirvish-history-go-forward)
+   "M-b"   '("history back" . dirvish-history-go-backward)))
+
+(my/leader
+  "f d" '("file manager" . dirvish-dwim)
+  "f D" '("dired other frame" . dired-other-frame)
+  "f j" '("jump to dired" . dired-jump)
+  "f t" '("file tree (side)" . dirvish-side)
+  "s f" '("find files (fd)" . dirvish-fd))
+#+end_src
+
+** Project
+
+Built-in =project.el=; no projectile.
+
+#+begin_src emacs-lisp
+  (use-package project
+    :ensure nil
+    :init
+    (setq project-vc-extra-root-markers '(".project" "deps.edn" "bb.edn" "pyproject.toml")))
+
+  (my/leader
+    "p p" '("switch project" . project-switch-project)
+    "p f" '("find file" . project-find-file)
+    "p b" '("buffers" . project-switch-to-buffer))
+#+end_src
+
+** Jump
+:PROPERTIES:
+:CUSTOM_ID: jump
+:END:
+
+=imenu= is built in; =avy= supplies the character jump.
+
+#+begin_src emacs-lisp
+  (use-package avy
+    :ensure t
+    :commands (avy-goto-char avy-goto-line)
+    :init
+    (setq avy-all-windows t
+          avy-timeout-seconds 0.4))
+
+  (my/leader
+    "j i" '("imenu" . imenu)
+    "j j" '("goto char" . avy-goto-char))
+#+end_src
+
+
+* UI
+
+** Fonts
+
+[[https://github.com/rainstormstudio/nerd-icons.el][nerd-icons]] supplies the glyphs for =dashboard= and the completion UIs.
+
+=:ensure t= is *not* optional. =init.el= leaves =use-package-always-ensure= and =use-package-always-defer= at nil, so a bare =(use-package nerd-icons)= expands to a plain =require= with no Elpaca order behind it, and the failed require aborts the rest of =config.el=. Nothing else pulls it in: =dashboard= declares only =((emacs "27.1"))=.
+
+The glyphs need the =Symbols Nerd Font Mono= family (the default =nerd-icons-font-family=). =M-x nerd-icons-install-fonts= puts it in =~/.local/share/fonts=, outside Nix; add =nerd-fonts.symbols-only= to =dev/dev.nix= to have Home Manager own it.
+
+#+begin_src emacs-lisp
+  (use-package nerd-icons
+    :ensure t
+    :demand t)
+#+end_src
+
+** Themes
+[[https://protesilaos.com/emacs/ef-themes][ef-themes]] with a light/dark pair behind =SPC t T=. =SPC t= collects the display toggles.
+
+Some good font choices for programming...
+- FiraCode Nerd Font
+- 0xProto Nerd Font Mono
+
+#+begin_src emacs-lisp
+  (use-package ef-themes
+    :ensure t
+    :demand t
+    :config
+    ;; Set after load: `ef-themes-to-toggle' and `ef-themes-mixed-fonts' are
+    ;; defvaralias-es onto the modus-themes variables, and assigning them
+    ;; before the alias exists warns about overwriting the aliased value.
+    (setq ef-themes-to-toggle '(ef-maris-light ef-maris-dark)
+          ef-themes-mixed-fonts t)
+    (load-theme 'ef-maris-light :no-confirm)
+    ;; Family name verified against `fc-list' output.
+    (set-face-attribute 'default nil :family "Fira Code Nerd Font" :height 100))
+
+  (defun my/toggle-theme ()
+    "Toggle between the light and dark `ef-themes' pair."
+    (interactive)
+    (ef-themes-toggle))
+
+  (my/leader
+    "t n" '("line numbers" . display-line-numbers-mode)
+    "t t" '("truncate lines" . toggle-truncate-lines)
+    "t T" '("theme light/dark" . my/toggle-theme))
+#+end_src
+
+** Landing page
+
+[[https://github.com/emacs-dashboard/dashboard][dashboard]] as the startup buffer on a fresh start only; [[#restore-open-buffers][Restore open buffers]] owns the startup wiring, so this block does none.
+
+Options are set in =:init=, before =dashboard-setup-startup-hook= reads them. [[#fonts][nerd-icons]] alone does not give icons: =dashboard-icon-type= is gated on the two =set-*-icons= flags.
+
+#+begin_src emacs-lisp
+  (use-package dashboard
+    :ensure t
+    :demand t
+    :init
+    (setq dashboard-center-content t
+          dashboard-vertically-center-content t
+          dashboard-set-heading-icons t
+          dashboard-set-file-icons t))
+#+end_src
+
+* Completion
+:PROPERTIES:
+:CUSTOM_ID: completion
+:END:
+
+vertico + orderless + marginalia in the minibuffer; corfu in buffers; consult behind =SPC b=, =SPC s= and =SPC /=; embark for actions on candidates; wgrep for editable grep buffers.
+
+** Minibuffer
+
+#+begin_src emacs-lisp
+  (use-package vertico
+    :ensure t
+    :demand t
+    :init
+    (setq vertico-cycle t
+          vertico-count 15)
+    :config
+    (vertico-mode 1))
+
+  (use-package orderless
+    :ensure t
+    :demand t
+    :init
+    (setq completion-styles '(orderless basic)
+          completion-category-defaults nil
+          completion-category-overrides '((file (styles basic partial-completion)))))
+
+  (use-package marginalia
+    :ensure t
+    :demand t
+    :config
+    (marginalia-mode 1))
+#+end_src
+
+** consult
+
+#+begin_src emacs-lisp
+  (use-package consult
+    :ensure t
+    :demand t
+    :init
+    (setq consult-narrow-key "<"
+          register-preview-delay 0.5
+          register-preview-function #'consult-register-format
+          xref-show-xrefs-function #'consult-xref
+          xref-show-definitions-function #'consult-xref)
+    :config
+    (consult-customize consult-ripgrep consult-buffer :preview-key '(:debounce 0.3 any)))
+
+  (my/leader
+    "/"   '("ripgrep project" . consult-ripgrep)
+    "b b" '("switch buffer" . consult-buffer)
+    "f r" '("recent files" . consult-recent-file)
+    "s s" '("search line" . consult-line)
+    "s p" '("ripgrep project" . consult-ripgrep))
+#+end_src
+
+** corfu
+
+TAB is indentation only ([[#indentation][Indentation]]), so completion comes from =corfu-auto= or from an explicit =M-TAB=.
+
+#+begin_src emacs-lisp
+  (use-package corfu
+    :ensure t
+    :demand t
+    :init
+    (setq corfu-auto t
+          corfu-auto-prefix 2
+          corfu-auto-delay 0.15
+          corfu-cycle t
+          corfu-quit-no-match 'separator
+          corfu-preselect 'prompt)
+    :config
+    (global-corfu-mode 1)
+    (corfu-popupinfo-mode 1)
+    ;; Escape should leave the popup, not insert-state.
+    (keymap-set corfu-map "<escape>" #'corfu-quit))
+#+end_src
+
+** embark and wgrep
+
+=C-.= acts on the thing at point, including the current minibuffer candidate. =embark-export= from =consult-ripgrep= gives a grep buffer; =wgrep= makes it editable with =C-c C-p=, and =C-c C-c= writes back.
+
+#+begin_src emacs-lisp
+  (use-package embark
+    :ensure t
+    :demand t
+    :init
+    (setq prefix-help-command #'embark-prefix-help-command)
+    :bind (("C-." . embark-act)
+           ("C-h B" . embark-bindings)
+           :map minibuffer-local-map
+           ("C-." . embark-act)
+           ("C-c C-o" . embark-export)))
+
+  ;; No preview hook here: embark-consult installs its own
+  ;; `consult--default-completion-list-preview-setup' on
+  ;; `embark-collect-mode-hook'.  (The commonly copied
+  ;; `consult-preview-at-point-mode' hook no longer exists in consult, and
+  ;; adding it breaks every embark-collect / embark-live buffer.)
+  (use-package embark-consult
+    :ensure t
+    :demand t
+    :after (embark consult))
+
+  (use-package wgrep
+    :ensure t
+    :demand t
+    :init
+    (setq wgrep-auto-save-buffer t))
+#+end_src
+
+
+
+* Version control
+#+begin_src emacs-lisp
+;; :demand t (not deferred to :commands): global-git-commit-mode only
+;; installs its find-file-hook once git-commit.el has loaded, and that
+;; only happens when magit loads. $EDITOR/$VISUAL can start a fresh
+;; daemon and open COMMIT_EDITMSG before magit-status is ever called, so
+;; magit-commit integration must load at startup, not on first :commands use.
+(use-package magit
+  :ensure t
+  :demand t
+  :commands (magit-status magit-dispatch)
+  :init
+  (setq magit-diff-refine-hunk 'all
+        magit-save-repository-buffers 'dontask)
+  :config
+  ;; Bedrock: start commit messages in insert state.
+  (add-hook 'git-commit-setup-hook #'evil-insert-state)
+
+  ;; with-editor's own C-c C-c / C-c C-k stay; evil-collection adds ZZ / ZQ.
+  ;; This is the local-leader equivalent, for COMMIT_EDITMSG and any other
+  ;; buffer $EDITOR hands back to an external process.  It must stay inside
+  ;; `:config': general resolves `with-editor-mode-map' when the form runs,
+  ;; and magit.el is what pulls with-editor in.
+  (my/local-leader
+    :keymaps 'with-editor-mode-map
+    ""  (cons "editor" (make-sparse-keymap))
+    "c" '("finish" . with-editor-finish)
+    "k" '("cancel" . with-editor-cancel)))
+
+(my/leader
+  "g s" '("status" . magit-status))
+
+;; We use git. Don't try all the other VC systems in existence first.
+(setq vc-handled-backends '(Git))
+
+#+end_src
+
+
+* Tools
+** Tree-sitter
+
+Grammars are not bundled with Emacs or managed by Nix here. Install once per machine, from a running Emacs:
+
+- =M-x treesit-install-language-grammar= for one language
+- =M-x treesit-auto-install-all= for every grammar =treesit-auto= knows
+- =M-x markdown-ts-mode-install-parsers= for the =markdown= + =markdown-inline= pair
+
+They land in =~/.config/emacs/tree-sitter/=. =treesit-auto= remaps a classic mode to its =*-ts-mode= only when the grammar is present, so a missing grammar degrades instead of erroring.
+
+=treesit-auto-add-to-auto-mode-alist= is called with *no* argument on purpose: ='all= would overwrite Emacs 31's own =\.rs\' → rust-ts-mode-maybe= style entries, whose job is to degrade when the grammar is missing, and every uninstalled language would prompt instead.
+
+=treesit-language-source-alist= starts empty; built-in language files push their own entry on load. =treesit-auto= only /let-binds/ its recipes inside =treesit-auto-install-all=, so a plain =treesit-install-language-grammar= sees nothing for a language whose mode came from a package. The entries below are the grammars this config wires by hand (see [[#nix][Nix]]).
+
+#+begin_src emacs-lisp
+  (use-package treesit
+    :ensure nil
+    :config
+    ;; src/ is at the repository root for this grammar, so URL alone is enough.
+    (add-to-list 'treesit-language-source-alist
+                 '(nix "https://github.com/nix-community/tree-sitter-nix")))
+
+  (use-package treesit-auto
+    :ensure t
+    :demand t
+    :init
+    (setq treesit-auto-install 'prompt)
+    :config
+    (treesit-auto-add-to-auto-mode-alist)
+    (global-treesit-auto-mode 1))
+#+end_src
+
+** editorconfig
+
+Built in since Emacs 30.
+
+#+begin_src emacs-lisp
+  (use-package editorconfig
+    :ensure nil
+    :config
+    (editorconfig-mode 1))
+#+end_src
+
+** eglot
+
+Built in. Emacs 31 already maps =clojure-lsp=, =clangd= and =pyright-langserver= in =eglot-server-programs=; all three come from =home.packages= in =editors/emacs/emacs.nix=, so only the hooks are needed.
+
+#+begin_src emacs-lisp
+  (use-package eglot
+    :ensure nil
+    :hook ((clojure-mode clojurescript-mode clojurec-mode clojure-ts-mode
+            c-mode c-ts-mode c++-mode c++-ts-mode
+            python-mode python-ts-mode)
+           . eglot-ensure)
+    :init
+    (setq eglot-autoshutdown t
+          eglot-sync-connect nil
+          eglot-extend-to-xref t)
+    :config
+    (my/local-leader
+      :keymaps 'eglot-mode-map
+      ""  (cons "lsp" (make-sparse-keymap))
+      "a" '("code action" . eglot-code-actions)
+      "r" '("rename" . eglot-rename)
+      "=" '("format buffer" . eglot-format-buffer)))
+#+end_src
+* LLM
+** ECA
+
+[[https://github.com/editor-code-assistant/eca-emacs][eca-emacs]] (MELPA =eca=), client for the [[https://github.com/editor-code-assistant/eca][ECA]] agent server.
+
+- nixpkgs has no =eca= package, so the client downloads the server itself. =no-littering= already points =eca-server-install-path= at =var/eca/=.
+- No API keys are exported here: use =/login= in the chat.  An API key in the environment overrides a subscription login and bills the API.
+- =evil-collection= has an =eca= module (=RET= submits in normal state).  The chat also starts in insert state; =evil-insert-state-map= leaves =RET= alone.
+- =markdown-mode= comes in as a dependency and autoloads a =.md= entry ahead of [[#markdown][markdown-ts-mode]].  =treesit-auto= remaps it back once the =markdown= grammar is installed; until then =.md= opens in =markdown-mode=.
+- Bindings sit outside =use-package= (as for Magit) because the package is autoloaded on first command.  =eca-transient-menu= has no autoload cookie, so it is left on its own =C-c .= in ECA buffers.
+
+#+begin_src emacs-lisp
+  (use-package eca
+    :ensure t
+    :config
+    ;; Chat: type straight into the prompt.
+    (evil-set-initial-state 'eca-chat-mode 'insert))
+
+  (my/leader
+    "a a" '("start / open chat" . eca)
+    "a c" '("toggle chat window" . eca-chat-toggle-window)
+    "a n" '("new chat" . eca-chat-new)
+    "a s" '("switch chat" . eca-switch-to-chat)
+    "a w" '("workspaces" . eca-workspaces)
+    "a !" '("next chat needing attention" . eca-chat-go-to-next-attention)
+    "a i" '("inline prompt" . eca-chat-inline-prompt)
+    "a r" '("rewrite region" . eca-rewrite)
+    "a f" '("add file/region as context" . eca-chat-add-context-to-user-prompt)
+    "a m" '("select model" . eca-chat-select-model)
+    "a g" '("select agent" . eca-chat-select-agent)
+    "a ," '("settings" . eca-settings)
+    "a R" '("restart server" . eca-restart)
+    "a q" '("stop server" . eca-stop))
+#+end_src
+
+* File format support
+** Org
+
+Built-in org (9.8.x), never installed via Elpaca, so the tangle in =init.el= cannot hit a mixed-version conflict. [[https://github.com/snosov1/toc-org][toc-org]] maintains the in-file table of contents.
+
+#+begin_src emacs-lisp
+(use-package org
+  :ensure nil
+  :init
+  (setq org-startup-indented t
+        org-hide-emphasis-markers t
+        org-src-fontify-natively t
+        org-edit-src-content-indentation 0
+        org-return-follows-link t)
+  :config
+  (add-to-list 'load-path (expand-file-name "~/dotfiles/agents/emacs/tasks-org"))
+  (require 'tasks-org)
+  (my/local-leader
+    :keymaps 'org-mode-map
+    ""    (cons "org" (make-sparse-keymap))
+    "t"   '("todo" . org-todo)
+    "e"   '("export" . org-export-dispatch)
+    "d"   (cons "dates" (make-sparse-keymap))
+    "d s" '("schedule" . org-schedule)
+    "d d" '("deadline" . org-deadline)
+    "s"   (cons "subtree" (make-sparse-keymap))
+    "s d" '("demote" . org-demote-subtree)
+    "'"   '("edit block" . org-edit-special)
+    "x"   '("toggle checkbox" . org-toggle-checkbox)))
+
+(use-package toc-org
+  :ensure t
+  :hook (org-mode . toc-org-mode))
+#+end_src
+
+** Markdown
+Emacs 31.1 ships =markdown-ts-mode= as experimental and opt-in: no autoload cookie and no =.md= entry in =auto-mode-alist=, so it is enabled explicitly here. This release has no export helper. Needs the =markdown= and =markdown-inline= grammars (see [[#tree-sitter][Tree-sitter]]).
+
+
+#+begin_src emacs-lisp
+(use-package markdown-ts-mode
+  :ensure nil
+  :mode ("\\.md\\'" . markdown-ts-mode)
+  :config
+  ;; install extras - e.g. TOC insertion etc.
+  (require 'markdown-ts-mode-x)
+  (markdown-ts-toc-update-before-save-mode)
+  (my/local-leader
+    :keymaps 'markdown-ts-mode-map
+    ""    (cons "markdown" (make-sparse-keymap))
+    "TAB" '("outline cycle" . markdown-ts-outline-cycle)
+    ;; command
+    "c"   (cons "command" (make-sparse-keymap))
+    "c n" '("renumber list" . markdown-ts-renumber-list)
+    ;; export
+    "e"   (cons "export" (make-sparse-keymap))
+    "e e" '("convert" . markdown-ts-convert)
+    "e f" '("convert file" . markdown-ts-convert-file)
+    "e o" '("convert & open externally" . my/markdown-ts-convert-open-external)
+    "e p" '("live preview (eww)" . my/markdown-eww-preview-mode)
+    ;; heading
+    "h"   (cons "heading" (make-sparse-keymap))
+    "h k" '("promote" . markdown-ts-promote)
+    "h j" '("demote" . markdown-ts-demote)
+    "h K" '("move subtree up" . markdown-ts-move-subtree-up)
+    "h J" '("move subtree down" . markdown-ts-move-subtree-down)
+    ;; insert
+    "i"   (cons "insert" (make-sparse-keymap))
+    "i s" '("block structure" . markdown-ts-insert-structure)
+    "i l" '("list item" . markdown-ts-insert-list-item)
+    "i t" '("table" . markdown-ts-table-insert-table)
+    "i T" '("table of contents" . markdown-ts-toc-insert-template)
+    ;; table of contents
+    "I"   (cons "Index/TOC" (make-sparse-keymap))
+    "I i" '("insert" . markdown-ts-toc-insert-template)
+    "I c" '("clear" . markdown-ts-toc-clear)
+    "I u" '("update" . markdown-ts-toc-generate)
+    ;; text / emphasis
+    "x"   (cons "text" (make-sparse-keymap))
+    "x e" '("emphasize" . markdown-ts-emphasize)
+    "x E" '("remove emphasis" . markdown-ts-remove-emphasis)
+    ;; toggle
+    "T"   (cons "toggle" (make-sparse-keymap))
+    "T m" '("markup hiding" . markdown-ts-toggle-hide-markup)
+    "T i" '("inline images" . markdown-ts-toggle-inline-images)
+    "T t" '("checkbox" . markdown-ts-toggle-checkbox)
+    ;; table
+    "t"   (cons "table" (make-sparse-keymap))
+    "t a" '("align" . markdown-ts-table-align-table)
+    "t p" '("row up" . markdown-ts-table-move-row-up)
+    "t n" '("row down" . markdown-ts-table-move-row-down)
+    "t f" '("column right" . markdown-ts-table-move-column-right)
+    "t b" '("column left" . markdown-ts-table-move-column-left)
+    "t r" '("insert row" . markdown-ts-table-insert-row)
+    "t R" '("delete row" . markdown-ts-table-delete-row)
+    "t c" '("insert column" . markdown-ts-table-insert-column)
+    "t C" '("delete column" . markdown-ts-table-delete-column)
+    "t d" '("convert region" . markdown-ts-table-convert-region)
+    "t t" '("transpose" . markdown-ts-table-transpose-table)))
+#+end_src
+
+*** Export
+=markdown-ts-mode-x= supplies the converters (Pandoc for =html= and =pdf=; =cmark=/=cmark-gfm=/=markdown.pl= for =html=). =e e= (=markdown-ts-convert=) and =e f= (=markdown-ts-convert-file=) prompt for format, converter and output file; a prefix argument makes either display the result through =markdown-ts-convert-display-function=.
+
+=e o= is a thin wrapper that forces a one-shot HTML export beside the source and opens it in the /external/ browser by let-binding that display function to =browse-url-of-file=, which honours =browse-url-browser-function=. It is the fuller-fidelity counterpart to the =shr=-based =e p= preview.
+
+#+begin_src emacs-lisp
+  (defun my/markdown-ts-convert-open-external ()
+    "Convert the current buffer to HTML and open it in the external browser.
+  Exports beside the source so relative links resolve, and routes display
+  through `browse-url-of-file' (honouring `browse-url-browser-function')."
+    (interactive)
+    (let ((markdown-ts-convert-display-function #'browse-url-of-file))
+      (markdown-ts-convert
+       nil
+       (concat (file-name-sans-extension
+                (or buffer-file-name
+                    (expand-file-name "markdown-preview" default-directory)))
+               ".html")
+       '(html . pandoc) t t t)))
+#+end_src
+
+*** Live preview in EWW
+EWW renders no JavaScript, so a browser-side live preview (as =org-markdown-preview= does over WebSockets) is impossible here. Instead Emacs /pushes/ the refresh: on =after-save-hook=, convert the buffer to HTML with Pandoc --- reusing =markdown-ts-convert= from [[#markdown][markdown-ts-mode-x]], so no new packages --- and (re)render that file in EWW. =C-, e p= toggles it.
+
+This is a structural /reading/ preview, not a fidelity one: =shr= handles headings, lists, tables, emphasis, links and images, but applies almost no CSS and shows fenced code blocks as plain =<pre>= with no syntax highlighting. There is no scroll-sync; the preview only restores its own scroll position across refreshes.
+
+- The HTML is a =make-temp-file= written /beside the source/ (a dotted =.mdprev-*.html=) so relative image links resolve; it is deleted when the mode is turned off or the buffer is killed.
+- =markdown-ts-convert= reads the live buffer (=nil= input file), so unsaved edits preview too; the refresh fires on save to keep Pandoc spawns cheap. Swap =after-save-hook= for an idle timer if you want keystroke-level updates.
+- EWW renders asynchronously via =url-retrieve=, so the saved scroll position is restored from a one-shot buffer-local =eww-after-render-hook=. Assumes the default =eww-auto-rename-buffer= (=nil=), i.e. a single =*eww*= buffer.
+
+#+begin_src emacs-lisp
+  (defvar-local my/markdown-eww-preview-file nil
+    "Temp HTML file backing the EWW preview of this buffer.")
+
+  (defun my/markdown-eww-preview--file ()
+    "Return this buffer's preview HTML file, creating it beside the source."
+    (or (and my/markdown-eww-preview-file
+             (file-exists-p my/markdown-eww-preview-file)
+             my/markdown-eww-preview-file)
+        (setq my/markdown-eww-preview-file
+              (make-temp-file (expand-file-name ".mdprev-" default-directory)
+                              nil ".html"))))
+
+  (defun my/markdown-eww-preview--cleanup ()
+    "Delete this buffer's preview HTML file."
+    (when (and my/markdown-eww-preview-file
+               (file-exists-p my/markdown-eww-preview-file))
+      (delete-file my/markdown-eww-preview-file))
+    (setq my/markdown-eww-preview-file nil))
+
+  (defun my/markdown-eww-preview-refresh ()
+    "Convert the current buffer to HTML and (re)render it in EWW.
+  Focus stays in the source window; the preview's scroll position is
+  restored after EWW's asynchronous render."
+    (when (derived-mode-p 'markdown-ts-mode)
+      (let* ((html (my/markdown-eww-preview--file))
+             (ewin (get-buffer-window "*eww*" 'visible))
+             (start (and ewin (window-start ewin)))
+             (pt    (and ewin (window-point ewin))))
+        ;; nil input-file => current buffer contents (unsaved edits included).
+        (markdown-ts-convert nil html '(html . pandoc) nil t t)
+        (save-selected-window
+          (select-window
+           (or ewin
+               (display-buffer (get-buffer-create "*eww*")
+                               '(display-buffer-pop-up-window
+                                 (inhibit-same-window . t)))))
+          (when start
+            (with-current-buffer (get-buffer "*eww*")
+              (letrec ((restore
+                        (lambda ()
+                          (remove-hook 'eww-after-render-hook restore t)
+                          (when-let ((w (get-buffer-window (current-buffer) 'visible)))
+                            (set-window-start w start)
+                            (set-window-point w pt)))))
+                (add-hook 'eww-after-render-hook restore nil t))))
+          (let ((inhibit-message t))
+            (eww-open-file html))))))
+
+  (define-minor-mode my/markdown-eww-preview-mode
+    "Live-preview the Markdown buffer in EWW, refreshing on save."
+    :lighter " md-eww"
+    (if my/markdown-eww-preview-mode
+        (progn
+          (add-hook 'after-save-hook #'my/markdown-eww-preview-refresh nil t)
+          (add-hook 'kill-buffer-hook #'my/markdown-eww-preview--cleanup nil t)
+          (my/markdown-eww-preview-refresh))
+      (remove-hook 'after-save-hook #'my/markdown-eww-preview-refresh t)
+      (remove-hook 'kill-buffer-hook #'my/markdown-eww-preview--cleanup t)
+      (my/markdown-eww-preview--cleanup)))
+#+end_src
+
+* Language support
+** Clojure
+
+#+begin_src emacs-lisp
+  (use-package clojure-mode
+    :ensure t
+    :mode (("\\.clj\\'" . clojure-mode)
+           ("\\.cljs\\'" . clojurescript-mode)
+           ("\\.cljc\\'" . clojurec-mode)
+           ("\\.edn\\'" . clojure-mode)))
+
+  (use-package cider
+    :ensure t
+    :after clojure-mode
+    :init
+    (setq cider-repl-display-help-banner nil
+          cider-save-file-on-load t
+          cider-font-lock-dynamically '(macro core function var))
+    :config
+    (my/local-leader
+      :keymaps 'clojure-mode-map
+      ""    (cons "clojure" (make-sparse-keymap))
+      "'"   '("jack in" . cider-jack-in)
+      "e"   (cons "eval" (make-sparse-keymap))
+      "e e" '("last sexp" . cider-eval-last-sexp)
+      "e f" '("defun" . cider-eval-defun-at-point)
+      "e b" '("buffer" . cider-eval-buffer)
+      "s"   (cons "repl" (make-sparse-keymap))
+      "s s" '("switch to repl" . cider-switch-to-repl-buffer)
+      "t"   (cons "test" (make-sparse-keymap))
+      "t t" '("test at point" . cider-test-run-test)
+      "t n" '("ns tests" . cider-test-run-ns-tests)))
+
+  (use-package lispyville
+    :ensure t
+    :hook ((emacs-lisp-mode clojure-mode clojurescript-mode clojurec-mode
+            lisp-mode scheme-mode) . lispyville-mode)
+    :config
+    (lispyville-set-key-theme
+     '(operators c-w prettify text-objects atom-motions
+       additional additional-insert slurp/barf-lispy commentary)))
+#+end_src
+
+** Nix
+
+[[https://github.com/nix-community/nix-ts-mode][nix-ts-mode]] (nix-community, MELPA); Emacs 31.1 ships no Nix mode and no =.nix= entry in =auto-mode-alist=. Needs the =nix= grammar (see [[#tree-sitter][Tree-sitter]]); without it the mode degrades to a plain =prog-mode= with a warning. Fontification runs at the stock =treesit-font-lock-level= 3 like every other =*-ts-mode= here; the mode also defines a decorative level 4, but the variable is global.
+
+#+begin_src emacs-lisp
+  (use-package nix-ts-mode
+    :ensure t
+    :mode "\\.nix\\'")
+#+end_src
+
+* Terminal and REPL states
+
+Bedrock: terminal-like buffers start in Emacs state so the terminal sees the keys. vterm/eat are not installed by this config, so guard on them.
+
+#+begin_src emacs-lisp
+  (dolist (hook '(vterm-mode-hook eat-mode-hook term-mode-hook shell-mode-hook
+                  eshell-mode-hook))
+    (add-hook hook #'evil-emacs-state))
+#+end_src

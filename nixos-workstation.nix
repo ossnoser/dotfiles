@@ -10,9 +10,7 @@
   ];
 
   # Use latest kernel for workstations
-  # boot.kernelPackages = pkgs.linuxPackages_latest;
-  # ... stick to 6.18 for now, due to issues with 6.19 and nvidia-open driver (Feb 2026)
-  boot.kernelPackages = pkgs.linuxKernel.packages.linux_6_18;
+  boot.kernelPackages = pkgs.linuxPackages_latest;
 
   #This is to allow maestral (dropbox sync client) to work with the nasty Neuromod dropbox mess
   boot.kernel.sysctl."fs.inotify.max_user_watches" = 1048576;
@@ -71,8 +69,18 @@
   services.udev.packages = [
     pkgs.nrf-udev
     pkgs.openocd
-    # pkgs.segger-jlink
+    pkgs.segger-jlink
   ];
+
+  # segger-jlink (needed for its udev rules above) is unfree and pulls in the
+  # insecure segger-jlink-qt4. allowUnfree is set in nixos-base.nix; the
+  # remaining overrides live only here, on the NixOS system nixpkgs config
+  # (the Home Manager pkgs set in flake.nix does not use segger-jlink).
+  # Match on pname, not name-version: permittedInsecurePackages needs the exact
+  # version and broke on each nixpkgs bump (810 -> 952 -> 970).
+  nixpkgs.config.allowInsecurePredicate =
+    pkg: pkgs.lib.getName pkg == "segger-jlink-qt4";
+  nixpkgs.config.segger-jlink.acceptLicense = true;
 
   # Required to install sway via home-manager
   # ... but we're installing via nixos
@@ -105,8 +113,16 @@
 
   # List packages installed in system profile. To search, run:
   # $ nix search wget
-  environment.variables.EDITOR = pkgs.lib.mkForce "emacsclient -nw";
-  environment.variables.VISUAL = "emacsclient -n -c";
+  # `--alternate-editor=` (empty value) makes emacsclient start `emacs --daemon`
+  # on demand instead of failing with "can't find socket"; there is no
+  # services.emacs unit. Written as the long `=` form so consumers that split
+  # $EDITOR on whitespace without shell quoting still pass an empty value.
+  environment.variables.EDITOR = pkgs.lib.mkForce "emacsclient --alternate-editor= -nw";
+  # No "-n": git resolves GIT_EDITOR -> core.editor -> VISUAL -> EDITOR, so
+  # VISUAL (not EDITOR) is what `git commit` actually runs on this host, and
+  # -n (--no-wait) would make emacsclient return before the commit buffer is
+  # edited, aborting with an empty message. See design/log/2026-09-03-bootstrap-standalone-emacs-config.org.
+  environment.variables.VISUAL = "emacsclient --alternate-editor= -c";
 
   environment.systemPackages = with pkgs; [
     waybar

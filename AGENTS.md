@@ -21,14 +21,13 @@ aliases, provisioning, and required submodule bootstraps.
 
 ## Nix-specific gotchas
 
-- **Linux tracks nixpkgs unstable; Darwin is pinned** to a bisect-verified
-  commit on `release-25.11` (see flake comment) to dodge
-  [nixpkgs#507531](https://github.com/NixOS/nixpkgs/issues/507531). Bump
-  together with the `nix-darwin` + `home-manager-darwin` pins.
-- **Overlays differ by platform.** Linux (`pkgs`): nix-microchip,
-  rust-overlay, NUR, llm-agents, claude-desktop. Darwin: llm-agents,
-  claude-desktop, + a tiny babashka overlay sourcing unstable (drop once
-  the darwin pin advances past bb 1.12.211).
+- **Linux and Darwin both track `nixos-unstable`, through separate inputs.**
+  Darwin uses `nixpkgs-darwin`, and `nix-darwin` and `home-manager-darwin`
+  follow it. The separate input lets you pin Darwin when a macOS regression
+  occurs, without a change to the Linux package set. The earlier
+  `release-25.11` pin (for
+  [nixpkgs#507531](https://github.com/NixOS/nixpkgs/issues/507531)) was
+  removed at `22ed8db`.
 - **`strix` host (Framework Desktop / Ryzen AI Max+ 395)** pulls in
   `inputs.nix-amd-ai.nixosModules.default` for XRT/XDNA/Lemonade/ROCm/
   Vulkan. **Do not** add `nix-amd-ai.inputs.nixpkgs.follows` — closure
@@ -38,11 +37,16 @@ aliases, provisioning, and required submodule bootstraps.
 
 `pkgs/overlay.nix` auto-exposes each `pkgs/<name>/default.nix` as `pkgs.<name>`
 and flake output `packages.x86_64-linux.<name>` (`nix build .#<name> --impure`) —
-no flake edits to add one.
+no flake edits to add one. See [pkgs/README.md](pkgs/README.md) for the
+auto-discovery mechanism and how to add a package.
 
-- **dirge** (pure-Rust coding agent): `pkgs.dirge` = from-source build
-  (`buildRustPackage`, default, installed by `dev/dev-linux.nix`); `pkgs.dirge-bin`
-  = prebuilt release tarball fallback. See
+- **`pkgs/` holds no packages right now** — only `overlay.nix` and `README.md`.
+  Do not cite `pkgs/dirge`: the local dirge derivations were removed at
+  `15cfd6c` in favour of the upstream flake.
+- **dirge** (pure-Rust coding agent) now comes from the `dirge` flake input.
+  `dev/dev-linux.nix` installs `pkgs.dirge-bin` and sources the `:` zsh plugin
+  from `${inputs.dirge}`, because neither package output ships
+  `shell-plugin/`. History:
   `design/log/2026-06-17-package-dirge-coding-agent-as-a-local-ni.org`.
 
 ## `agents.nix` — the dotagents bridge
@@ -59,10 +63,9 @@ live submodule tree into:
   `subagents/`, which carries the claude/codex approval-relaxing override).
   Definition resolution order and `config.edn` merge semantics are the
   `herdr-orch` skill's contract rather than wiring, and are documented once
-  in `agents/skills/herdr-orch/scripts/docs/contract.md` (§ Model resolution,
-  § Harness `:extra-args`)
-- `~/.pi/agent/{AGENTS.md, prompts, extensions, skills, settings.json}`
-- `~/.config/mcp/mcp.json`
+  in [agents/skills/herdr-orch/scripts/docs/contract.md#Model resolution](agents/skills/herdr-orch/scripts/docs/contract.md#model-resolution) and
+  [agents/skills/herdr-orch/scripts/docs/contract.md#Harness `:extra-args`](agents/skills/herdr-orch/scripts/docs/contract.md#harness-extra-args)
+- `~/.pi/agent/{AGENTS.md, prompts, extensions, skills, settings.json, mcp.json}`
 - `~/.local/bin/ot` → org-tasks CLI shim
 
 Out-of-store symlinks, so edits in `agents/` take effect immediately via
@@ -74,10 +77,12 @@ On activation, `agents.nix`:
    (`chromium`, `pi-clojure`, `dataspex`) when their `package.json` hash
    changes.
 3. Registers the submodule-local `pi-settings` git clean filter by running
-   `agents/install-git-filter.sh` when `filter.pi-settings.clean` is unset
-   (the filter definition lives in `.git/config`, so it cannot be tracked).
-   The filter strips pi's volatile runtime keys (`lastChangelogVersion`,
-   `defaultProvider`, `defaultModel`) from `agents/pi/settings.json` at stage
-   time; `jq` is in `home.packages` because the filter is `required = true`.
-   Failure warns instead of aborting activation. See README.org § The
-   pi-settings clean filter.
+   `agents/install-git-filter.sh` on every activation; the script exits early
+   when the filter is current (the filter definition lives in `.git/config`,
+   so it cannot be tracked). The filter strips pi's volatile runtime keys
+   (`lastChangelogVersion`, `deviceId`) from `agents/pi/settings.json` at
+   stage time; `defaultProvider` and `defaultModel` are tracked (pi saves them
+   only on Ctrl+S in `/model`). `jq` is in `home.packages` because the filter
+   is `required = true`.
+   Failure warns instead of aborting activation. See
+   [README.org#The pi-settings clean filter](README.org#the-pi-settings-clean-filter).
